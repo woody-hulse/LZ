@@ -3,6 +3,7 @@ import datetime
 
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -48,8 +49,84 @@ def debug_print(statements=[], end='\n'):
     print(end=end)
 
 
+def linearity_plot(model, delta_mu=50, num_delta_mu=20, num_samples=100):
+    def plot(x, y, err_down, err_up, color='blue', marker='o'):
+        plt.plot(x, x, color='black', label='y = x Line')
+        plt.errorbar(x, y, yerr=(err_down, err_up), label='\u0394\u03bc Prediction', color=color, marker=marker, linestyle='None')
+
+        plt.xlabel('Actual \u0394\u03bc [ns]')
+        plt.ylabel('Median Predicted \u0394\u03bc [ns]')
+        plt.legend()
+        plt.show()
+    
+    
+    dMS = DS(DMS_NAME)
+    data_indices = np.array([i for i in range(len(dMS.ULvalues))])
+    np.random.shuffle(data_indices)
+    X = dMS.DSdata[data_indices]
+    X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
+    Y = dMS.ULvalues[data_indices]
+    Y = Y[:, 1]
+
+    counts = np.zeros(num_delta_mu)
+    X_delta_mu = np.empty((num_delta_mu, num_samples, 700))
+
+    for i in tqdm(range(len(X))):
+        index = int(Y[i] // delta_mu)
+        if counts[index] >= num_samples: continue
+        else:
+            X_delta_mu[index, int(counts[index]), :] = X[i]
+            counts[index] += 1
+
+    predictions = np.zeros((num_delta_mu, num_samples))
+
+    prediction_means = np.zeros(num_delta_mu)
+    prediction_left_stds = np.zeros(num_delta_mu)
+    prediction_right_stds = np.zeros(num_delta_mu)
+
+    prediction_medians = np.zeros(num_delta_mu)
+    prediction_16 = np.zeros(num_delta_mu)
+    prediction_84 = np.zeros(num_delta_mu)
+
+    for i in tqdm(range(num_delta_mu)):
+        samples = np.expand_dims(X_delta_mu[i], axis=-1)
+        predictions[i][:] = np.squeeze(model(samples))
+        prediction_means[i] = np.mean(predictions[i])
+        prediction_left_stds[i] = np.std(predictions[i][predictions[i] < prediction_means[i]])
+        prediction_right_stds[i] = np.std(predictions[i][predictions[i] >= prediction_means[i]])
+        
+        prediction_medians[i] = np.median(predictions[i])
+        hist, bin_edges = np.histogram(predictions[i], bins=100, density=True)
+        cumulative_distribution = np.cumsum(hist * np.diff(bin_edges))
+        total_area = cumulative_distribution[-1]
+
+        prediction_16[i] = prediction_medians[i] - bin_edges[np.where(cumulative_distribution >= 0.16 * total_area)[0][0]]
+        prediction_84[i] = bin_edges[np.where(cumulative_distribution >= 0.84 * total_area)[0][0]] - prediction_medians[i]
+        
+    plot(np.arange(0, delta_mu * num_delta_mu, delta_mu), prediction_medians, prediction_16, prediction_84)
+
+
 def gaussian(X, C, sigma,):
     return C*np.exp(-(X-350)**2/(2*sigma**2)) # hard-coded mean
+
+def add_1090(x):
+        x = x[:, :, 0]
+        cdfs = tf.cumsum(x, axis=1)
+        time_diffs = np.zeros((x.shape[0], 1))
+        for i, cdf in enumerate(cdfs):
+            cdf = cdf / cdf[-1]
+
+            time = np.arange(-3500, 3500, 10)  # ns
+
+            # Find the 10% and 90% indices
+            idx_10 = np.searchsorted(cdf, 0.1)
+            idx_90 = np.searchsorted(cdf, 0.9)
+
+            # Calculate the time difference
+            time_diff = time[idx_90] - time[idx_10]
+            time_diffs[i] = time_diff
+        
+        return np.concatenate([x, time_diffs], axis=1)
 
 
 def jitter_pulses(pulses, t=50):
@@ -76,7 +153,7 @@ def reset_weights(model):
     return model
 
 
-def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2, compile=False, summary=True, callbacks=True, learning_rate=0.001, metrics=[]):
+def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2, compile=False, summary=False, callbacks=False, learning_rate=0.001, metrics=[]):
     debug_print(['training', model.name])
 
     if compile:
@@ -89,7 +166,7 @@ def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2
     if callbacks:
         tf.keras.backend.set_value(model.optimizer.learning_rate, learning_rate)
         reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
-        c.append(tf.keras.callbacks.EarlyStopping(patience=10))
+        c.append(tf.keras.callbacks.EarlyStopping(patience=20))
         c.append(reduce_lr)
 
     history = model.fit(
@@ -152,12 +229,6 @@ def classification():
     dSS = DS(DSS_NAME)
     dMS = DS(DMS_NAME)
 
-    def normalize(data):
-        if np.linalg.norm(data) == 0:
-            print('ALERT', data)
-            return None
-        else: return data / np.linalg.norm(data)
-
     debug_print(['preprocessing data'])
     data_indices = np.array([i for i in range(len(dSS.ULvalues) + len(dMS.ULvalues))])
     np.random.shuffle(data_indices)
@@ -186,9 +257,10 @@ def classification():
     # test_model = build_vgg(length=700, name='vgg', width=16) # MLPModel(output_size=1)
     baseline_model = MLPModel(input_size=700, classification=True)
     test_model = HybridModel(input_size=700, classification=True)
+    test_model2 = ConvNoAttentionModel(input_size=700,  output_size=1, classification=True)
 
     # train(baseline_model, X_train, Y_train, epochs=50, batch_size=16, callbacks=False)
-    train(test_model, X_train, Y_train, epochs=50, batch_size=128, callbacks=False)
+    train(test_model2, X_train, Y_train, epochs=50, batch_size=128, callbacks=False)
     # train(test_model2, X_dev_train, Y_train, epochs=25, batch_size=16, compile=True)
     # train(test_model3, X_diff_train, Y_train, epochs=25, batch_size=16, compile=True)
 
@@ -223,8 +295,16 @@ def jitter_test(models, X, Y, epochs=100):
     plt.show()
     
 
+def compare_history(models, metric):
+    for model in models:
+        plt.plot(model.history.history[metric], label=model.name)
+    plt.legend()
+    plt.xlabel('Epoch')
+    plt.ylabel(metric)
+    plt.show()
+
 def regression():
-    num_samples = 1000
+    num_samples = 50000
 
     dMS = DS(DMS_NAME)
 
@@ -258,6 +338,7 @@ def regression():
     '''
 
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+    X_1090_train = add_1090(X_train)
 
     debug_print(['     X_train:', X_train.shape])
     debug_print(['     Y_train:', Y_train.shape])
@@ -268,8 +349,31 @@ def regression():
     baseline_model = BaselineModel(output_size=1).build_model() 
     test_model3 = build_vgg(length=700, name='vgg13', width=16)
     test_model4 = build_vgg(length=700, name='vgg16', width=16)
+    attention_model = ConvAttentionModel(input_size=700, output_size=1, classification=False)
+    no_attention_model = ConvNoAttentionModel(input_size=700, output_size=1, classification=False, name='cnn_model')
 
-    jitter_test([test_model1, test_model2, test_model3, test_model4, baseline_model], X, Y, epochs=100)
+    mlp_model = MLPModel(input_size=700, output_size=1, classification=False)
+    mlp_1090_model = MLPModel(input_size=701, output_size=1, classification=False, name='mlp_1090_model')
+
+    train(attention_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
+    train(no_attention_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=False)
+    # train(baseline_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=False)
+    
+    # train(test_model2, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
+    # train(test_model3, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
+    # train(no_attention_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
+    # train(mlp_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
+    # train(mlp_1090_model, X_1090_train, Y_train, epochs=100, batch_size=32, callbacks=True)
+
+    compare_history(
+        models=[attention_model, no_attention_model],
+        metric='val_loss'
+    )
+
+    linearity_plot(attention_model)
+    linearity_plot(no_attention_model)
+
+    # jitter_test([test_model1, test_model2, test_model3, test_model4, baseline_model], X, Y, epochs=100)
 
     # reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
     # my_callbacks = [tf.keras.callbacks.EarlyStopping(patience=100), reduce_lr]
@@ -303,7 +407,7 @@ def channel_classification():
 
 
 def main():
-    classification()
+    regression()
 
 
 if __name__ == '__main__':

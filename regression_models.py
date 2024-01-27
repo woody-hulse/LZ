@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 from vgg import *
 
 
@@ -53,9 +54,9 @@ class MLPModel(tf.keras.Model):
     def __init__(self, input_size=None, output_size=1, classification=False, name='mlp_model'):
         super().__init__(name=name)
 
-        dense1 = tf.keras.layers.Dense(256, activation='relu')
-        dense2 = tf.keras.layers.Dense(64, activation='relu')
-        dense3 = tf.keras.layers.Dense(16, activation='relu')
+        dense1 = tf.keras.layers.Dense(512, activation='relu')
+        dense2 = tf.keras.layers.Dense(128, activation='relu')
+        dense3 = tf.keras.layers.Dense(32, activation='relu')
         dense4 = tf.keras.layers.Dense(output_size)
 
         self.flatten_layer = tf.keras.layers.Flatten()
@@ -79,6 +80,7 @@ class MLPModel(tf.keras.Model):
             x = layer(x)
         
         return x
+
     
 
 class RNNModel(tf.keras.Model):
@@ -132,13 +134,192 @@ class ConvModel2(tf.keras.Model):
         return x
     
 
+class AttentionModel(tf.keras.Model):
+    def __init__(self, input_size=None, output_size=1, classification=False, name='attention_model'):
+        super().__init__(name=name)
+
+        attention_size = 64
+        self.K = tf.keras.layers.Dense(attention_size)
+        self.Q = tf.keras.layers.Dense(attention_size)
+        self.V = tf.keras.layers.Dense(attention_size)
+        self.attention_layer = tf.keras.layers.Attention(use_scale=True)
+        self.flatten_layer = tf.keras.layers.Flatten()
+        self.dense_layers = [tf.keras.layers.Dense(64) for _ in range(2)]
+        self.output_layer = tf.keras.layers.Dense(1, activation='linear')
+
+        metrics = []
+        self.optimizer = tf.keras.optimizers.Adam()
+        if classification: 
+            self.output_layer = tf.keras.layers.Dense(1, activation='sigmoid')
+            self.loss = tf.keras.losses.BinaryCrossentropy()
+            metrics.append('AUC')
+        else: 
+            self.loss = tf.keras.losses.MeanAbsoluteError()
+
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss)
+            self.build((None, input_size, 1))
+
+    def call(self, x):
+        Q = self.Q(x)
+        V = self.V(x)
+        QV_attention_seq = self.attention_layer([Q, V])
+        Q_encoding = tf.keras.layers.GlobalAveragePooling1D()(Q)
+        QV_attention = tf.keras.layers.GlobalAveragePooling1D()(QV_attention_seq)
+        x = tf.keras.layers.Concatenate()([Q_encoding, QV_attention])
+
+        for layer in self.dense_layers:
+            x = layer(x)
+
+        x = self.output_layer(x)
+
+        return x  
+    
+# https://jeas.springeropen.com/articles/10.1186/s44147-023-00186-9
+class ConvAttentionModel(tf.keras.Model):
+    def __init__(self, input_size=None, output_size=1, classification=False, name='conv_attention_model'):
+        super().__init__(name=name)
+
+        self.block1 = [
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Activation('relu'),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.MaxPool1D(pool_size=2),
+            tf.keras.layers.Attention()
+        ]
+
+        self.block2 = [
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Activation('relu'),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.MaxPool1D(pool_size=2),
+            tf.keras.layers.Attention()
+        ]
+
+        self.block3 = [
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Activation('relu'),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Attention()
+        ]
+
+        self.block4 = [
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Activation('relu'),
+            tf.keras.layers.BatchNormalization()
+        ]
+
+        self.blocks = [self.block1, self.block2, self.block3, self.block4]
+
+        self.flatten_layer = tf.keras.layers.Flatten()
+        self.dense_layers = [tf.keras.layers.Dense(128) for _ in range(2)]
+        self.output_layer = tf.keras.layers.Dense(1, activation='linear')
+
+        metrics = []
+        self.optimizer = tf.keras.optimizers.Adam()
+        if classification: 
+            self.output_layer = tf.keras.layers.Dense(1, activation='sigmoid')
+            self.loss = tf.keras.losses.BinaryCrossentropy()
+            metrics.append('AUC')
+        else: 
+            self.loss = tf.keras.losses.MeanAbsoluteError()
+
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss)
+            self.build((None, input_size, 1))
+
+    def call(self, x):
+        for block in self.blocks:
+            for layer in block:
+                if isinstance(layer, tf.keras.layers.Attention):
+                    x = layer([x, x])
+                else:
+                    x = layer(x)
+
+        x = self.flatten_layer(x)
+        
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        x = self.output_layer(x)
+
+        return x
+    
+
+class ConvNoAttentionModel(tf.keras.Model):
+    def __init__(self, input_size=None, output_size=1, classification=False, name='conv_no_attention_model'):
+        super().__init__(name=name)
+
+        self.block1 = [
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Activation('relu'),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.MaxPool1D(pool_size=2)
+        ]
+
+        self.block2 = [
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Activation('relu'),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.MaxPool1D(pool_size=2)
+        ]
+
+        self.block3 = [
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Activation('relu'),
+            tf.keras.layers.BatchNormalization()
+        ]
+
+        self.block4 = [
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Activation('relu'),
+            tf.keras.layers.BatchNormalization()
+        ]
+
+        self.blocks = [self.block1, self.block2, self.block3, self.block4]
+
+        self.flatten_layer = tf.keras.layers.Flatten()
+        self.dense_layers = [tf.keras.layers.Dense(128) for _ in range(2)]
+        self.output_layer = tf.keras.layers.Dense(output_size, activation='linear')
+
+        metrics = []
+        self.optimizer = tf.keras.optimizers.Adam()
+        if classification: 
+            self.output_layer = tf.keras.layers.Dense(output_size, activation='sigmoid')
+            self.loss = tf.keras.losses.BinaryCrossentropy()
+            metrics.append('AUC')
+        else: 
+            self.loss = tf.keras.losses.MeanAbsoluteError()
+
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
+            self.build((None, input_size, 1))
+
+    def call(self, x):
+        for block in self.blocks:
+            for layer in block:
+                x = layer(x)
+
+        x = self.flatten_layer(x)
+        
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        x = self.output_layer(x)
+
+        return x
+
+
 
 class BaselineModel(tf.keras.Model):
-    def __init__(self, input_size=None, output_size=1, name='baseline_model'):
+    def __init__(self, input_size=700, output_size=1, classification=False, name='baseline_model'):
         super().__init__(name=name)
-        self.model = self.build_model()
+        self.model = self.build_model(input_shape=(input_size, 1))
         self.input_size = input_size
         self.output_size = output_size
+        
+        self.loss = tf.keras.losses.MeanAbsoluteError()
+        self.optimizer = tf.keras.optimizers.Adam()
 
     def call(self, x):
         return self.model(x)
@@ -152,7 +333,7 @@ class BaselineModel(tf.keras.Model):
         model.add(tf.keras.layers.Dense(1, activation='linear'))
         optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
         model.compile(loss="mean_absolute_error", optimizer=optimizer)#, metrics=[tf.keras.metrics.RootMeanSquaredError()])
-
+        model.build((1,) + input_shape)
         return model
     
 class BaselineConvModel(tf.keras.Model):

@@ -33,6 +33,13 @@ def plot_simulated_pulses(pulses):
     plt.show()
 
 
+def normalize(data):
+        if np.linalg.norm(data) == 0:
+            print('ALERT', data)
+            return None
+        else: return data / np.linalg.norm(data)
+
+
 if __name__ == '__main__':
     pulses = create_simulated_pulses(100, 700)
     print(pulses)
