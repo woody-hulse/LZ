@@ -347,7 +347,7 @@ class BaselineConvModel(tf.keras.Model):
         return self.model(x)
 
     def build_model(self, n_hidden=1, n_neurons=50, activation='relu', learning_rate=1e-3, input_shape=(700, 1)):
-        model = tf.keras.models.Sequential(name='baseline_conv')
+        model = tf.keras.models.Sequential(name='two_layer_conv')
         model.add(tf.keras.layers.InputLayer(input_shape=input_shape))
 
         model.add(tf.keras.layers.Conv1D(filters=8, kernel_size=3, padding='same', activation=activation))

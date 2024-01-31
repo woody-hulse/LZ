@@ -24,6 +24,7 @@ from vgg import *
 DSS_NAME = 'dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered'
 DMS_NAME = 'dMS_230918_gaussgas_700sample_area7000_areafrac0o3_deltamuall50ns_5000each_1e5events_random_centered'
 
+MODEL_SAVE_PATH = 'saved_models/'
 
 class DS():
     def __init__(self, DSname):
@@ -35,10 +36,7 @@ class DS():
             debug_print(['loading', self.DStype, 'data from', path])
             fkeys = f.files
             self.DSdata = f[fkeys[0]]       # arraysize =（event * 700 samples)
-            self.ULvalues = f[fkeys[1]]    # arraysize =（event * 4 underlying parameters)
-
-            # print(self.DSdata.shape, self.DSdata)
-            # print(self.ULvalues.shape, self.ULvalues)
+            self.ULvalues = f[fkeys[1]]     # arraysize =（event * 4 underlying parameters)
 
 
 def debug_print(statements=[], end='\n'):
@@ -49,27 +47,48 @@ def debug_print(statements=[], end='\n'):
     print(end=end)
 
 
-def linearity_plot(model, delta_mu=50, num_delta_mu=20, num_samples=100):
-    def plot(x, y, err_down, err_up, color='blue', marker='o'):
+def save_model_weights(model, name=None):
+    if not name: name = model.name
+    debug_print(['saving', name, 'weights to', MODEL_SAVE_PATH])
+    model.save_weights(MODEL_SAVE_PATH + name)
+
+
+def load_model_weights(model, name=None):
+    if not name: name = model.name
+    debug_print(['loading', name, 'weights from', MODEL_SAVE_PATH + name + '.data'])
+    model.load_weights(MODEL_SAVE_PATH + name)
+
+
+
+def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1000):
+    def plot(x, y, err_down, err_up, color='blue', marker='o', title=None):
         plt.plot(x, x, color='black', label='y = x Line')
         plt.errorbar(x, y, yerr=(err_down, err_up), label='\u0394\u03bc Prediction', color=color, marker=marker, linestyle='None')
 
         plt.xlabel('Actual \u0394\u03bc [ns]')
         plt.ylabel('Median Predicted \u0394\u03bc [ns]')
+        plt.title(title)
         plt.legend()
         plt.show()
     
     
-    dMS = DS(DMS_NAME)
-    data_indices = np.array([i for i in range(len(dMS.ULvalues))])
-    np.random.shuffle(data_indices)
-    X = dMS.DSdata[data_indices]
-    X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
-    Y = dMS.ULvalues[data_indices]
-    Y = Y[:, 1]
+    if not data:
+        dMS = DS(DMS_NAME)
+        data_indices = np.array([i for i in range(len(dMS.ULvalues))])
+        np.random.shuffle(data_indices)
+        X = dMS.DSdata[data_indices]
+        X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
+        Y = dMS.ULvalues[data_indices]
+        Y = Y[:, 1]
+    else:
+        X, Y = data
 
     counts = np.zeros(num_delta_mu)
     X_delta_mu = np.empty((num_delta_mu, num_samples, 700))
+
+    if '1090' in model.name.split('_'):
+        X_delta_mu = np.empty((num_delta_mu, num_samples, 701))
+        X = add_1090(np.expand_dims(X, axis=-1))
 
     for i in tqdm(range(len(X))):
         index = int(Y[i] // delta_mu)
@@ -103,7 +122,9 @@ def linearity_plot(model, delta_mu=50, num_delta_mu=20, num_samples=100):
         prediction_16[i] = prediction_medians[i] - bin_edges[np.where(cumulative_distribution >= 0.16 * total_area)[0][0]]
         prediction_84[i] = bin_edges[np.where(cumulative_distribution >= 0.84 * total_area)[0][0]] - prediction_medians[i]
         
-    plot(np.arange(0, delta_mu * num_delta_mu, delta_mu), prediction_medians, prediction_16, prediction_84)
+    plot(np.arange(0, delta_mu * num_delta_mu, delta_mu), 
+         prediction_medians, prediction_16, prediction_84, 
+         title=model.name + ' model linearity plot')
 
 
 def gaussian(X, C, sigma,):
@@ -113,7 +134,7 @@ def add_1090(x):
         x = x[:, :, 0]
         cdfs = tf.cumsum(x, axis=1)
         time_diffs = np.zeros((x.shape[0], 1))
-        for i, cdf in enumerate(cdfs):
+        for i, cdf in tqdm(enumerate(cdfs)):
             cdf = cdf / cdf[-1]
 
             time = np.arange(-3500, 3500, 10)  # ns
@@ -295,16 +316,17 @@ def jitter_test(models, X, Y, epochs=100):
     plt.show()
     
 
-def compare_history(models, metric):
+def compare_history(models, metric, title=None):
     for model in models:
         plt.plot(model.history.history[metric], label=model.name)
     plt.legend()
     plt.xlabel('Epoch')
     plt.ylabel(metric)
+    plt.title(title)
     plt.show()
 
 def regression():
-    num_samples = 50000
+    num_samples = 100
 
     dMS = DS(DMS_NAME)
 
@@ -343,47 +365,33 @@ def regression():
     debug_print(['     X_train:', X_train.shape])
     debug_print(['     Y_train:', Y_train.shape])
 
-    test_model1 = ConvModel(input_size=700)
-    test_model2 = BaselineConvModel(output_size=1).build_model()
-    # test_model3 = MLPModel()
-    baseline_model = BaselineModel(output_size=1).build_model() 
-    test_model3 = build_vgg(length=700, name='vgg13', width=16)
-    test_model4 = build_vgg(length=700, name='vgg16', width=16)
-    attention_model = ConvAttentionModel(input_size=700, output_size=1, classification=False)
-    no_attention_model = ConvNoAttentionModel(input_size=700, output_size=1, classification=False, name='cnn_model')
+    ten_layer_conv = ConvModel(input_size=700, name='10_layer_conv')
+    two_layer_conv = BaselineConvModel(output_size=1).build_model()
+    vgg16_small = build_vgg(length=700, name='vgg16_small', width=16)
+    vgg13 = build_vgg(length=700, name='vgg13', width=16)
+    vgg16 = build_vgg(length=700, name='vgg16', width=32)
+    attention_model = ConvAttentionModel(input_size=700, output_size=1, classification=False, name='attention')
+    no_attention_model = ConvNoAttentionModel(input_size=700, output_size=1, classification=False, name='no_attention')
+    two_layer_mlp = BaselineModel(input_size=700, output_size=1, classification=False, name='2_layer_mlp')
+    three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    three_layer_mlp_1090 = MLPModel(input_size=701, output_size=1, classification=False, name='3_layer_mlp_1090')
 
-    mlp_model = MLPModel(input_size=700, output_size=1, classification=False)
-    mlp_1090_model = MLPModel(input_size=701, output_size=1, classification=False, name='mlp_1090_model')
+    models = [two_layer_mlp, three_layer_mlp, three_layer_mlp_1090, two_layer_conv, ten_layer_conv, vgg16_small, vgg13, vgg16, no_attention_model, attention_model]
 
-    train(attention_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
-    train(no_attention_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=False)
-    # train(baseline_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=False)
-    
-    # train(test_model2, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
-    # train(test_model3, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
-    # train(no_attention_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
-    # train(mlp_model, X_train, Y_train, epochs=100, batch_size=32, callbacks=True)
-    # train(mlp_1090_model, X_1090_train, Y_train, epochs=100, batch_size=32, callbacks=True)
+    for model in models:
+        x_train = X_1090_train if '1090' in model.name.split('_') else X_train
+        y_train = Y_train
+        train(model, x_train, y_train, epochs=2, batch_size=64, callbacks=False, compile=True)
+        save_model_weights(model)
 
-    compare_history(
-        models=[attention_model, no_attention_model],
-        metric='val_loss'
-    )
+    for model in models:
+        debug_print(['creating metric plots for', model.name])
+        compare_history([model], metric='val_loss', title=model.name + ' model validation loss over training')
+        linearity_plot(model, data=[np.squeeze(X_test), Y_test])
 
-    linearity_plot(attention_model)
-    linearity_plot(no_attention_model)
+    compare_history(models, metric='val_loss', title='Model validation loss over training')
 
     # jitter_test([test_model1, test_model2, test_model3, test_model4, baseline_model], X, Y, epochs=100)
-
-    # reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
-    # my_callbacks = [tf.keras.callbacks.EarlyStopping(patience=100), reduce_lr]
-    # training_history = baseline_model.fit(X_train, Y_train, epochs=100, validation_split=0.2, callbacks=[my_callbacks])
-
-    # train(baseline_model, X_train, Y_train, epochs=100, batch_size=16, compile=True)
-    # train(test_model3, X_train, Y_train, epochs=50, batch_size=16)
-    # train(baseline_model, X_train, Y_train, epochs=50, batch_size=16)
-    # train(test_model2, X_dev_train, Y_train, epochs=25, batch_size=16, compile=True)
-    # train(test_model3, X_diff_train, Y_train, epochs=25, batch_size=16, compile=True)
 
 
 def channel_classification():
@@ -401,9 +409,6 @@ def channel_classification():
     print(sample_adjacency_matrix)
 
     test_gnn = BaselineGNN(num_channels=num_channels)
-
-
-
 
 
 def main():

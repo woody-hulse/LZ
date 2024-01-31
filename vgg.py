@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-def Conv_1D_Block(x, model_width, kernel):
+def conv_block(x, model_width, kernel):
     # 1D Convolutional Block with BatchNormalization
     x = tf.keras.layers.Convolution1D(model_width, kernel, padding='same', kernel_initializer="he_normal")(x)
     x = tf.keras.layers.BatchNormalization()(x)
@@ -21,49 +21,34 @@ class VGG:
     def VGG11(self):
         inputs = tf.keras.Input((self.length, self.num_channel))  # The input tensor
         # Block 1
-        x = Conv_1D_Block(inputs, self.num_filters * (2 ** 0), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(inputs, self.num_filters * (2 ** 0), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 2
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 1), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 3
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 4
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 5
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Fully Connected (MLP) block
         x = tf.keras.layers.Flatten(name='flatten')(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
         if self.dropout_rate:
-            x = tf.keras.layers.Dropout(self.dropout_rate, name='Dropout')(x)
+            x = tf.keras.layers.Dropout(self.dropout_rate, name='dropout')(x)
         outputs = tf.keras.layers.Dense(self.output_nums, activation='linear')(x)
         if self.problem_type == 'Classification':
             outputs = tf.keras.layers.Dense(self.output_nums, activation='softmax')(x)
@@ -76,51 +61,36 @@ class VGG:
     def VGG13(self):
         inputs = tf.keras.Input((self.length, self.num_channel))  # The input tensor
         # Block 1
-        x = Conv_1D_Block(inputs, self.num_filters * (2 ** 0), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 0), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(inputs, self.num_filters * (2 ** 0), 3)
+        x = conv_block(x, self.num_filters * (2 ** 0), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 2
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 1), 3)
+        x = conv_block(x, self.num_filters * (2 ** 1), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 3
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 4
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 5
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Fully Connected (MLP) block
         x = tf.keras.layers.Flatten(name='flatten')(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
         if self.dropout_rate:
-            x = tf.keras.layers.Dropout(self.dropout_rate, name='Dropout')(x)
+            x = tf.keras.layers.Dropout(self.dropout_rate, name='dropout')(x)
         outputs = tf.keras.layers.Dense(self.output_nums, activation='linear')(x)
         if self.problem_type == 'Classification':
             outputs = tf.keras.layers.Dense(self.output_nums, activation='softmax')(x)
@@ -130,117 +100,87 @@ class VGG:
 
         return model
 
-    def VGG16(self):
+    def VGG16_small(self):
         inputs = tf.keras.Input((self.length, self.num_channel))  # The input tensor
         # Block 1
-        x = Conv_1D_Block(inputs, self.num_filters * (2 ** 0), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 0), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(inputs, 16, 3)
+        x = conv_block(x, 16, 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 2
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, 16, 3)
+        x = conv_block(x, 16, 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 3
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, 32, 3)
+        x = conv_block(x, 32, 3)
+        x = conv_block(x, 32, 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 4
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, 32, 5)
+        x = conv_block(x, 32, 5)
+        x = conv_block(x, 32, 5)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 5
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, 32, 5)
+        x = conv_block(x, 32, 5)
+        x = conv_block(x, 32, 5)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Fully Connected (MLP) block
         x = tf.keras.layers.Flatten(name='flatten')(x)
-        x = tf.keras.layers.Dense(256, activation='relu')(x)
-        x = tf.keras.layers.Dense(256, activation='relu')(x)
+        x = tf.keras.layers.Dense(64, activation='relu')(x)
+        x = tf.keras.layers.Dense(64, activation='relu')(x)
         if self.dropout_rate:
-            x = tf.keras.layers.Dropout(self.dropout_rate, name='Dropout')(x)
+            x = tf.keras.layers.Dropout(self.dropout_rate, name='dropout')(x)
         outputs = tf.keras.layers.Dense(self.output_nums, activation='linear')(x)
         if self.problem_type == 'Classification':
             outputs = tf.keras.layers.Dense(self.output_nums, activation='softmax')(x)
 
         # Create model.
-        model = tf.keras.Model(inputs=inputs, outputs=outputs, name='vgg16_1d')
+        model = tf.keras.Model(inputs=inputs, outputs=outputs, name='vgg16_small_1d')
 
         return model
 
     def VGG16_v2(self):
         inputs = tf.keras.Input((self.length, self.num_channel))  # The input tensor
         # Block 1
-        x = Conv_1D_Block(inputs, self.num_filters * (2 ** 0), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 0), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(inputs, self.num_filters * (2 ** 0), 3)
+        x = conv_block(x, self.num_filters * (2 ** 0), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 2
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 1), 3)
+        x = conv_block(x, self.num_filters * (2 ** 1), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 3
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 1)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = conv_block(x, self.num_filters * (2 ** 2), 1)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 4
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 1)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 1)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 5
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 1)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 1)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Fully Connected (MLP) block
         x = tf.keras.layers.Flatten(name='flatten')(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
         if self.dropout_rate:
-            x = tf.keras.layers.Dropout(self.dropout_rate, name='Dropout')(x)
+            x = tf.keras.layers.Dropout(self.dropout_rate, name='dropout')(x)
         outputs = tf.keras.layers.Dense(self.output_nums, activation='linear')(x)
         if self.problem_type == 'Classification':
             outputs = tf.keras.layers.Dense(self.output_nums, activation='softmax')(x)
@@ -253,57 +193,42 @@ class VGG:
     def VGG19(self):
         inputs = tf.keras.Input((self.length, self.num_channel))  # The input tensor
         # Block 1
-        x = Conv_1D_Block(inputs, self.num_filters * (2 ** 0), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 0), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(inputs, self.num_filters * (2 ** 0), 3)
+        x = conv_block(x, self.num_filters * (2 ** 0), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 2
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 1), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 1), 3)
+        x = conv_block(x, self.num_filters * (2 ** 1), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 3
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 2), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = conv_block(x, self.num_filters * (2 ** 2), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 4
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Block 5
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        x = Conv_1D_Block(x, self.num_filters * (2 ** 3), 3)
-        if x.shape[1] <= 2:
-            x = tf.keras.layers.MaxPooling1D(pool_size=1, strides=2, padding="valid")(x)
-        else:
-            x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = conv_block(x, self.num_filters * (2 ** 3), 3)
+        x = tf.keras.layers.MaxPooling1D(pool_size=2, strides=2, padding="valid")(x)
 
         # Fully Connected (MLP) block
         x = tf.keras.layers.Flatten(name='flatten')(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
         if self.dropout_rate:
-            x = tf.keras.layers.Dropout(self.dropout_rate, name='Dropout')(x)
+            x = tf.keras.layers.Dropout(self.dropout_rate, name='dropout')(x)
         outputs = tf.keras.layers.Dense(self.output_nums, activation='linear')(x)
         if self.problem_type == 'Classification':
             outputs = tf.keras.layers.Dense(self.output_nums, activation='softmax')(x)
@@ -315,6 +240,7 @@ class VGG:
     
 def build_vgg(length, name, width, num_channel=1, problem_type='Regression', output_nums=1):
     if name == 'vgg13': model = VGG(length, num_channel, width, problem_type=problem_type, output_nums=output_nums, dropout_rate=0.4).VGG13()
+    if name == 'vgg16_small': model = VGG(length, num_channel, width, problem_type=problem_type, output_nums=output_nums, dropout_rate=0.4).VGG16_small()
     if name == 'vgg16': model = VGG(length, num_channel, width, problem_type=problem_type, output_nums=output_nums, dropout_rate=0.4).VGG16_v2()
     model.loss = tf.keras.losses.MeanAbsoluteError()
     model.optimizer = tf.keras.optimizers.Adam()
@@ -322,16 +248,3 @@ def build_vgg(length, name, width, num_channel=1, problem_type='Regression', out
     model.build((None, length, 1))
 
     return model
-
-if __name__ == '__main__':
-    # Configurations
-    length = 1024  # Length of each Segment
-    model_name = 'VGG19'  # DenseNet Models
-    model_width = 16 # Width of the Initial Layer, subsequent layers start from here
-    num_channel = 1  # Number of Input Channels in the Model
-    problem_type = 'Regression' # Classification or Regression
-    output_nums = 1  # Number of Class for Classification Problems, always '1' for Regression Problems
-    
-    Model = VGG(length, num_channel, model_width, problem_type=problem_type, output_nums=output_nums, dropout_rate=False).VGG19()
-    Model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0003), loss=tf.keras.losses.MeanAbsoluteError(), metrics=tf.keras.metrics.MeanSquaredError())
-    Model.summary()
