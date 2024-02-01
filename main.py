@@ -21,8 +21,8 @@ from regression_models import *
 from channel_models import *
 from vgg import *
 
-DSS_NAME = 'dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered'
-DMS_NAME = 'dMS_230918_gaussgas_700sample_area7000_areafrac0o3_deltamuall50ns_5000each_1e5events_random_centered'
+DSS_NAME = '/content/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
+DMS_NAME = '/content/dMS_230918_gaussgas_700sample_area7000_areafrac0o3_deltamuall50ns_5000each_1e5events_random_centered.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
 
@@ -31,7 +31,7 @@ class DS():
         self.DSname = DSname
         self.DStype = 'test'
 
-        path ='../dSSdMS/' + self.DSname + '.npz'
+        path = self.DSname
         with np.load(path) as f:
             debug_print(['loading', self.DStype, 'data from', path])
             fkeys = f.files
@@ -326,7 +326,7 @@ def compare_history(models, metric, title=None):
     plt.show()
 
 def regression():
-    num_samples = 100
+    num_samples = 100000
 
     dMS = DS(DMS_NAME)
 
@@ -381,7 +381,7 @@ def regression():
     for model in models:
         x_train = X_1090_train if '1090' in model.name.split('_') else X_train
         y_train = Y_train
-        train(model, x_train, y_train, epochs=2, batch_size=64, callbacks=False, compile=True)
+        train(model, x_train, y_train, epochs=100, batch_size=64, callbacks=False, compile=True)
         save_model_weights(model)
 
     for model in models:
