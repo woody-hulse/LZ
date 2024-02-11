@@ -4,6 +4,7 @@ import datetime
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+from collections import Counter
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -21,8 +22,8 @@ from regression_models import *
 from channel_models import *
 from vgg import *
 
-DSS_NAME = '/content/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
-DMS_NAME = '/content/dMS_230918_gaussgas_700sample_area7000_areafrac0o3_deltamuall50ns_5000each_1e5events_random_centered.npz'
+DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
+DMS_NAME = '../dSSdMS/dMS_230918_gaussgas_700sample_area7000_areafrac0o3_deltamuall50ns_5000each_1e5events_random_centered.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
 
@@ -82,6 +83,7 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
         Y = Y[:, 1]
     else:
         X, Y = data
+        X = np.squeeze(X)
 
     counts = np.zeros(num_delta_mu)
     X_delta_mu = np.empty((num_delta_mu, num_samples, 700))
@@ -153,7 +155,7 @@ def add_1090(x):
 def jitter_pulses(pulses, t=50):
     debug_print(['jittering pulses'])
     jitter_pulses = []
-    for pulse in pulses:
+    for pulse in tqdm(pulses):
         pulse = np.squeeze(pulse)
         jitter = int(np.random.random() * t - t / 2)
         if jitter < 0: jitter_pulse = np.concatenate([np.zeros(-jitter), pulse[:jitter]], axis=-1)
@@ -286,25 +288,60 @@ def classification():
     # train(test_model3, X_diff_train, Y_train, epochs=25, batch_size=16, compile=True)
 
 
-def jitter_test(models, X, Y, epochs=100):
+def fourier_decomposition(signal, plot=True):
+    fft = np.fft.fft(signal)
+    n = np.arange(signal.shape[0]) * 0.1
+    if plot:
+        plt.subplot(2, 2, 1)
+        plt.title('Example event')
+        plt.plot(signal)
+        plt.xlabel('Time')
+
+        plt.subplot(2, 2, 2)
+        plt.title('Fourier Decomposition')
+        plt.xlabel('Freq (GHz)')
+        plt.ylabel('FFT Amplitude')
+        plt.stem(n, np.abs(fft), 'b', markerfmt=' ', basefmt='-b')
+
+        plt.subplot(2, 2, 3)
+        plt.title('Reconstruction')
+        plt.xlabel('Time')
+        plt.plot(np.fft.ifft(fft))
+
+        plt.subplot(2, 2, 4)
+        plt.title('Reconstruction (Centered waves)')
+        plt.xlabel('Time')
+        plt.plot(np.fft.ifft(np.abs(fft)))
+    
+    return np.abs(fft)
+
+
+def jitter_test(models, X, Y, epochs=100, plot_jitter=True):
 
     debug_print(['running jitter test'])
 
     sns.set_theme(style="whitegrid")
 
-    jitter = [0, 5, 20, 100, 200]
+    jitter = [300]
     X_jitter = []
     for j in jitter:
-        X_jitter.append(jitter_pulses(X, j))
+        x_jitter = jitter_pulses(X, j)
+        if plot_jitter:
+            for i in range(100):
+                plt.plot(x_jitter[i, :, 0])
+            plt.title("Plot of random time-translated events: ±" + str(int(j / 2) * 10) + "ns")
+            plt.show()
+        X_jitter.append(x_jitter)
 
     losses = []
     for index, model in enumerate(models):
         for i, (x, j) in enumerate(zip(X_jitter, jitter)):
             debug_print(['model', index + 1, '/', len(models), ':', model.name, '- test', i + 1, 'of', len(jitter)])
-            model = reset_weights(model)
-            history = train(model, x, Y, epochs=epochs, batch_size=16, validation_split=0.2, compile=False, summary=False)
+            # model = reset_weights(model)
+            history = train(model, x, Y, epochs=epochs, batch_size=16, validation_split=0.2, compile=False, summary=False, callbacks=False)
             loss = history.history['val_loss']
             losses.append([j, model.name, round(loss[-1], 3)])
+            linearity_plot(model, data=(x, Y))
     df = pd.DataFrame(losses, columns=['Jitter', 'Model', 'MAE Loss: ' + str(epochs) + ' epochs'])
 
     palette = sns.color_palette("rocket_r")
@@ -314,6 +351,8 @@ def jitter_test(models, X, Y, epochs=100):
     g.set_axis_labels('', 'Loss (MAE) after ' + str(epochs) + ' epochs')
     g.legend.set_title('Variation (\u0394t)')
     plt.show()
+
+
     
 
 def compare_history(models, metric, title=None):
@@ -325,7 +364,34 @@ def compare_history(models, metric, title=None):
     plt.title(title)
     plt.show()
 
+
+def shift_distribution(X, Y):
+    def sigmoid(x): return 1/(1 + np.exp(-x))
+    def func(x): return (1 + sigmoid(10 - x)) / 2 * X.shape[0] / 20
+
+    X_list, Y_list = [], []
+
+    for i in range(20):
+        start_index = int(i * X.shape[0] / 20)
+        end_index = int(start_index + func(i))
+        # print(i, start_index, end_index)
+        X_list.append(X[start_index:end_index])
+        Y_list.append(Y[start_index:end_index])
+    
+    X, Y = np.concatenate(X_list), np.concatenate(Y_list)
+    return X, Y
+
+
+def plot_distribution(Y):
+    counts, bins = np.histogram(Y)
+    plt.stairs(counts / Y.shape[0], bins, color='orange', fill=True)
+    plt.xlabel('Δμ')
+    plt.title('Distribution of model training data')
+    plt.show()
+
+
 def regression():
+    np.random.seed(42)
     num_samples = 100000
 
     dMS = DS(DMS_NAME)
@@ -337,10 +403,16 @@ def regression():
         else: return data / np.linalg.norm(data)
 
     debug_print(['preprocessing data'])
-    data_indices = np.array([i for i in range(len(dMS.ULvalues))])
+    X = dMS.DSdata
+    Y = np.array(dMS.ULvalues)[:, 1]
+    # X, Y = shift_distribution(X, Y)
+    # plot_distribution(Y)
+    data_indices = np.array([i for i in range(len(X))])
     np.random.shuffle(data_indices)
-    X = dMS.DSdata[data_indices][:num_samples]
+    X = X[data_indices][:num_samples]
     X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
+
+    X = jitter_pulses(X, t=300)
 
     '''
     X_avg = normalize(np.average(X, axis=0))
@@ -351,8 +423,10 @@ def regression():
     X_diff = np.concatenate([np.expand_dims(X[i] - X_dist, axis=0) for i in range(X.shape[0])], axis=0)
     '''
 
+    X_fft = np.concatenate([np.expand_dims(fourier_decomposition(x, plot=False), axis=0) for x in tqdm(X)])
     X = np.expand_dims(X, axis=-1)
-    Y = np.array(dMS.ULvalues)[:, 1][data_indices][:num_samples]
+    X_fft = np.expand_dims(X_fft, axis=-1)
+    Y = Y[data_indices][:num_samples]
 
     '''
     X_dev_train, X_dev_test, Y_train, Y_test = train_test_split(X_dev, Y, test_size=0.2, random_state=42)
@@ -360,7 +434,9 @@ def regression():
     '''
 
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-    X_1090_train = add_1090(X_train)
+    X_fft_train, X_fft_test, Y_train, Y_test = train_test_split(X_fft, Y, test_size=0.2, random_state=42)
+    # X_1090_train = add_1090(X_train)
+    # X_1090_test = add_1090(X_test)
 
     debug_print(['     X_train:', X_train.shape])
     debug_print(['     Y_train:', Y_train.shape])
@@ -375,6 +451,57 @@ def regression():
     two_layer_mlp = BaselineModel(input_size=700, output_size=1, classification=False, name='2_layer_mlp')
     three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
     three_layer_mlp_1090 = MLPModel(input_size=701, output_size=1, classification=False, name='3_layer_mlp_1090')
+    three_layer_mlp_2 = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+
+    load_model_weights(three_layer_mlp)
+    load_model_weights(three_layer_mlp_2)
+    # load_model_weights(three_layer_mlp_1090)
+
+    train(three_layer_mlp_2, X_fft_train, Y_train, epochs=50)
+    train(three_layer_mlp, X_train, Y_train, epochs=50)
+
+    linearity_plot(three_layer_mlp_2, data=[X_fft_test, Y_test])
+    linearity_plot(three_layer_mlp, data=[X_test, Y_test])
+
+    compare_history([three_layer_mlp, three_layer_mlp_2], metric='val_loss', title='Effect of FFT on ±1500ns time jitter')
+
+    losses = []
+    losses.append(tf.keras.losses.MeanAbsoluteError()(Y_test, tf.transpose(three_layer_mlp(X_test, training=False))))
+    losses.append(tf.keras.losses.MeanAbsoluteError()(Y_test, tf.transpose(three_layer_mlp_2(X_fft_test, training=False))))
+    
+    plt.figure(figsize=(10, 6))
+    plt.bar(['mlp_no_fft', 'mlp_fft'], losses, color='skyblue')
+    plt.xlabel('Model')
+    plt.ylabel('Mean absolute error')
+    plt.title('Model loss from reducing trainable params (on 20k samples after 200 epochs)')
+    plt.show()
+
+    return
+
+    jitter_test([three_layer_mlp], X_train, Y_train, epochs=25, plot_jitter=False)
+
+    
+
+    '''
+    models = [vgg16, vgg16_small]
+
+    losses = []
+    for model in tqdm(models):
+        x_test = X_1090_test if '1090' in model.name.split('_') else X_test
+        y_test = Y_test
+        load_model_weights(model)
+        loss = tf.keras.losses.MeanAbsoluteError()(y_test, tf.transpose(model(x_test, training=False)))
+        losses.append(loss)
+
+    plt.figure(figsize=(10, 6))
+    plt.bar([model.name for model in models], losses, color='skyblue')
+    plt.xlabel('Model')
+    plt.ylabel('Mean absolute error')
+    plt.title('Model loss from reducing trainable params (on 20k samples after 200 epochs)')
+    plt.show()
+    '''
+
+    '''
 
     models = [two_layer_mlp, three_layer_mlp, three_layer_mlp_1090, two_layer_conv, ten_layer_conv, vgg16_small, vgg13, vgg16, no_attention_model, attention_model]
 
@@ -390,6 +517,7 @@ def regression():
         linearity_plot(model, data=[np.squeeze(X_test), Y_test])
 
     compare_history(models, metric='val_loss', title='Model validation loss over training')
+    '''
 
     # jitter_test([test_model1, test_model2, test_model3, test_model4, baseline_model], X, Y, epochs=100)
 

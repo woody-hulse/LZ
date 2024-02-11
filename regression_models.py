@@ -69,6 +69,8 @@ class MLPModel(tf.keras.Model):
             metrics.append('AUC')
         else: 
             self.loss = tf.keras.losses.MeanAbsoluteError()
+            # self.loss = tf.keras.losses.MeanSquaredError()
+            # metrics.append(tf.keras.losses.MeanAbsoluteError())
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
