@@ -3,7 +3,130 @@ from matplotlib import pyplot as plt
 from scipy.stats import norm
 import tensorflow as tf
 
+from tqdm import tqdm
+import os
+import datetime
 
+'''
+Custom 'print' function
+    statements      : Print statements
+    end             : End token
+
+    return          : None
+'''
+def debug_print(statements=[], end='\n'):
+    ct = datetime.datetime.now()
+    print('[', str(ct)[:19], '] ', sep='', end='')
+    for statement in statements:
+        print(statement, end=' ')
+    print(end=end)
+
+
+'''
+Computes and appends 10/90 value to each pulse sample
+    x               : Array of pulses
+
+    return          : Array of pulses with concatenate 10/90 value
+'''
+def add_1090(x):
+        x = x[:, :, 0]
+        cdfs = tf.cumsum(x, axis=1)
+        time_diffs = np.zeros((x.shape[0], 1))
+        for i, cdf in tqdm(enumerate(cdfs)):
+            cdf = cdf / cdf[-1]
+
+            time = np.arange(-3500, 3500, 10)  # ns
+
+            # Find the 10% and 90% indices
+            idx_10 = np.searchsorted(cdf, 0.1)
+            idx_90 = np.searchsorted(cdf, 0.9)
+
+            # Calculate the time difference
+            time_diff = time[idx_90] - time[idx_10]
+            time_diffs[i] = time_diff
+        
+        return np.concatenate([x, time_diffs], axis=1)
+
+
+'''
+Adds variable time jitter to pulses
+    pulses          : Array of pulses
+    t               : Amount of jitter (pm t/2)
+
+    return          : Jittered pulses
+'''
+def jitter_pulses(pulses, t=50):
+    debug_print(['jittering pulses'])
+    jitter_pulses = []
+    for pulse in tqdm(pulses):
+        pulse = np.squeeze(pulse)
+        jitter = int(np.random.random() * t - t / 2)
+        if jitter < 0: jitter_pulse = np.concatenate([np.zeros(-jitter), pulse[:jitter]], axis=-1)
+        else: jitter_pulse = np.concatenate([pulse[jitter:], np.zeros(jitter)], axis=-1)
+        jitter_pulses.append(np.expand_dims(jitter_pulse, axis=-1))
+    
+    return np.expand_dims(np.concatenate(jitter_pulses, axis=-1).T, axis=-1)
+
+'''
+Take fast fourier decomposition of pulse data
+    signal          : Sample pulse of data
+
+    returns         : Phase shifted fourier decomposition data
+'''
+def fourier_decomposition(signal, plot=True):
+    fft = np.fft.fft(signal)
+    n = np.arange(signal.shape[0]) * 0.1
+    if plot:
+        plt.subplot(2, 2, 1)
+        plt.title('Example event')
+        plt.plot(signal)
+        plt.xlabel('Time')
+
+        plt.subplot(2, 2, 2)
+        plt.title('Fourier Decomposition')
+        plt.xlabel('Freq (GHz)')
+        plt.ylabel('FFT Amplitude')
+        plt.stem(n, np.abs(fft), 'b', markerfmt=' ', basefmt='-b')
+
+        plt.subplot(2, 2, 3)
+        plt.title('Reconstruction')
+        plt.xlabel('Time')
+        plt.plot(np.fft.ifft(fft))
+
+        plt.subplot(2, 2, 4)
+        plt.title('Reconstruction (Centered waves)')
+        plt.xlabel('Time')
+        plt.plot(np.fft.ifft(np.abs(fft)))
+    
+    return np.abs(fft)
+
+
+'''
+Shifts the relative representation of delta mu categories in data
+    X               : X data (pulses)
+    Y               : Y data (delta mu)
+
+    returns         : Distribution-shifted (X, Y)
+'''
+def shift_distribution(X, Y):
+    def sigmoid(x): return 1/(1 + np.exp(-x))
+    def func(x): return (1 + sigmoid(10 - x)) / 2 * X.shape[0] / 20
+
+    X_list, Y_list = [], []
+
+    for i in range(20):
+        start_index = int(i * X.shape[0] / 20)
+        end_index = int(start_index + func(i))
+        # print(i, start_index, end_index)
+        X_list.append(X[start_index:end_index])
+        Y_list.append(Y[start_index:end_index])
+    
+    X, Y = np.concatenate(X_list), np.concatenate(Y_list)
+    return X, Y
+
+'''
+*unused*
+'''
 def create_sample_adjacency_matrix(num_channels, connectivity=6):
     adjacency_matrix = np.zeros((num_channels, num_channels))
 
@@ -14,6 +137,9 @@ def create_sample_adjacency_matrix(num_channels, connectivity=6):
     
     return adjacency_matrix
 
+'''
+*unused*
+'''
 def create_simulated_pulses(num_channels, length, std=50, noise=0.1):
     
     pulses = np.zeros((num_channels, length))
@@ -26,6 +152,9 @@ def create_simulated_pulses(num_channels, length, std=50, noise=0.1):
 
     return pulses
 
+'''
+*unused*
+'''
 def plot_simulated_pulses(pulses):
     for pulse in pulses:
         plt.plot(pulse)
@@ -33,14 +162,18 @@ def plot_simulated_pulses(pulses):
     plt.plot(np.sum(pulses, axis=0))
     plt.show()
 
-
+'''
+Normalizes set of data
+'''
 def normalize(data):
         if np.linalg.norm(data) == 0:
             print('ALERT', data)
             return None
         else: return data / np.linalg.norm(data)
 
-
+'''
+TF data generator
+'''
 class CustomDataGenerator(tf.keras.utils.Sequence):
     def __init__(self, df, batch_size, input_size=(700, ), shuffle=True, add_noise=False):
         self.df = df.copy()

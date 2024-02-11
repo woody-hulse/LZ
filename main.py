@@ -1,6 +1,3 @@
-import os
-import datetime
-
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -21,12 +18,18 @@ from preprocessing import *
 from regression_models import *
 from channel_models import *
 from vgg import *
+from experiments import *
 
 DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
 DMS_NAME = '../dSSdMS/dMS_230918_gaussgas_700sample_area7000_areafrac0o3_deltamuall50ns_5000each_1e5events_random_centered.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
 
+'''
+Data structure for hosting DS data and associated UL values
+    self.DSdata     : Pulse height in phd (photons detected)
+    self.ULvalues   : Pulse information
+'''
 class DS():
     def __init__(self, DSname):
         self.DSname = DSname
@@ -40,14 +43,14 @@ class DS():
             self.ULvalues = f[fkeys[1]]     # arraysize =（event * 4 underlying parameters)
 
 
-def debug_print(statements=[], end='\n'):
-    ct = datetime.datetime.now()
-    print('[', str(ct)[:19], '] ', sep='', end='')
-    for statement in statements:
-        print(statement, end=' ')
-    print(end=end)
 
+'''
+Save and load TF model weights
+    model           : Tensorflow model
+    name            : Save name
 
+    return          : None
+'''
 def save_model_weights(model, name=None):
     if not name: name = model.name
     debug_print(['saving', name, 'weights to', MODEL_SAVE_PATH])
@@ -60,7 +63,16 @@ def load_model_weights(model, name=None):
     model.load_weights(MODEL_SAVE_PATH + name)
 
 
+'''
+Generates a linearity plot based on model and data
+    model           : Tensorflow model
+    data            : (X, Y) tuple
+    delta_mu        : Delta mu bin sizes
+    num_delta_mu    : Number of delta mu bins
+    num_samples     : Number of samples per delta mu bin
 
+    return          : None
+'''
 def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1000):
     def plot(x, y, err_down, err_up, color='blue', marker='o', title=None):
         plt.plot(x, x, color='black', label='y = x Line')
@@ -128,43 +140,23 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
          prediction_medians, prediction_16, prediction_84, 
          title=model.name + ' model linearity plot')
 
+'''
+Defines a Gaussian function
+    X               : Range of x values
+    C               : Coefficient
+    sigma           : Std of Gaussian
 
-def gaussian(X, C, sigma,):
-    return C*np.exp(-(X-350)**2/(2*sigma**2)) # hard-coded mean
+    return          : Gaussian distribution on x samples
+'''
+def gaussian(X, C, sigma):
+    return C*np.exp(-(X-350)**2/(2*sigma**2))
 
-def add_1090(x):
-        x = x[:, :, 0]
-        cdfs = tf.cumsum(x, axis=1)
-        time_diffs = np.zeros((x.shape[0], 1))
-        for i, cdf in tqdm(enumerate(cdfs)):
-            cdf = cdf / cdf[-1]
+'''
+Reset learned model weights to initialization
+    model           : Tensorflow model
 
-            time = np.arange(-3500, 3500, 10)  # ns
-
-            # Find the 10% and 90% indices
-            idx_10 = np.searchsorted(cdf, 0.1)
-            idx_90 = np.searchsorted(cdf, 0.9)
-
-            # Calculate the time difference
-            time_diff = time[idx_90] - time[idx_10]
-            time_diffs[i] = time_diff
-        
-        return np.concatenate([x, time_diffs], axis=1)
-
-
-def jitter_pulses(pulses, t=50):
-    debug_print(['jittering pulses'])
-    jitter_pulses = []
-    for pulse in tqdm(pulses):
-        pulse = np.squeeze(pulse)
-        jitter = int(np.random.random() * t - t / 2)
-        if jitter < 0: jitter_pulse = np.concatenate([np.zeros(-jitter), pulse[:jitter]], axis=-1)
-        else: jitter_pulse = np.concatenate([pulse[jitter:], np.zeros(jitter)], axis=-1)
-        jitter_pulses.append(np.expand_dims(jitter_pulse, axis=-1))
-    
-    return np.expand_dims(np.concatenate(jitter_pulses, axis=-1).T, axis=-1)
-
-
+    return          : Reset model
+'''
 def reset_weights(model):
     debug_print(['resetting', model.name, 'weights'])
     for layer in model.layers:
@@ -175,7 +167,22 @@ def reset_weights(model):
             ])
     return model
 
+'''
+Training function for tensorflow model
+    model           : Tensorflow model
+    X_train         : X training data (pulses)
+    y_train         : Y training data (delta mu)
+    epochs          : Number of training loops
+    batch_size      : Number of samples per batch
+    validation_split: Proportion of sample data to be dedicated as validation
+    compile         : Compile the model before training
+    summary         : Provide a summary of model before training
+    callbacks       : Add EarlyStopping, ReduceLROnPlateau to training cycle
+    learning_rate   : Designate learning rate for training start
+    metrics         : Training evaluation metrics
 
+    return          : Model training history (metrics + losses)
+'''
 def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2, compile=False, summary=False, callbacks=False, learning_rate=0.001, metrics=[]):
     debug_print(['training', model.name])
 
@@ -204,48 +211,9 @@ def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2
     
     return history
 
-
-def small_test(file): # 'SS_vs_MS_dataset.pkl'
-    df = pd.read_pickle(file)
-    df_shuffled = df[:5000].sample(frac=1)
-    # display(df)
-    # display(df_shuffled)
-
-    # ex = df_shuffled['DSdata'].iloc
-    # print(len(ex[0]), ex[0], ex[1])
-
-    training = df_shuffled[:5000]['DSdata']
-    target = df_shuffled[:5000]['truth']
-
-    # display(training)
-    # display(target) 
-
-    X = np.array(training.values.tolist())
-    X = np.expand_dims(normalize(X), axis=-1)
-    y = np.array(target.values.tolist())#.flatten()
-
-    '''
-    for i in range(50):
-        if y[i] == 0: plt.plot(X[i], color='blue')
-        if y[i] == 1: plt.plot(X[i], color='orange')
-    plt.show()
-    '''
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    debug_print(['X_train:', X_train.shape])
-    debug_print(['y_train:', y_train.shape])
-
-    test_model = ConvModel2(input_size=X.shape[0])
-    baseline_model = BaselineModel().build_model()
-
-    debug_print(['training', baseline_model.name])
-    train(baseline_model, X_train, y_train, epochs=50, batch_size=16)
-
-    debug_print(['training', test_model.name])
-    train(test_model, X_train, y_train, epochs=50, batch_size=16, compile=True)
-
-
+'''
+Perform classification-based tasks and experiments
+'''
 def classification():
     num_samples = 5000
 
@@ -287,101 +255,12 @@ def classification():
     # train(test_model2, X_dev_train, Y_train, epochs=25, batch_size=16, compile=True)
     # train(test_model3, X_diff_train, Y_train, epochs=25, batch_size=16, compile=True)
 
+'''
+Plot the distribution of pulse delta mu labels
+    Y           : Delta mu labels
 
-def fourier_decomposition(signal, plot=True):
-    fft = np.fft.fft(signal)
-    n = np.arange(signal.shape[0]) * 0.1
-    if plot:
-        plt.subplot(2, 2, 1)
-        plt.title('Example event')
-        plt.plot(signal)
-        plt.xlabel('Time')
-
-        plt.subplot(2, 2, 2)
-        plt.title('Fourier Decomposition')
-        plt.xlabel('Freq (GHz)')
-        plt.ylabel('FFT Amplitude')
-        plt.stem(n, np.abs(fft), 'b', markerfmt=' ', basefmt='-b')
-
-        plt.subplot(2, 2, 3)
-        plt.title('Reconstruction')
-        plt.xlabel('Time')
-        plt.plot(np.fft.ifft(fft))
-
-        plt.subplot(2, 2, 4)
-        plt.title('Reconstruction (Centered waves)')
-        plt.xlabel('Time')
-        plt.plot(np.fft.ifft(np.abs(fft)))
-    
-    return np.abs(fft)
-
-
-def jitter_test(models, X, Y, epochs=100, plot_jitter=True):
-
-    debug_print(['running jitter test'])
-
-    sns.set_theme(style="whitegrid")
-
-    jitter = [300]
-    X_jitter = []
-    for j in jitter:
-        x_jitter = jitter_pulses(X, j)
-        if plot_jitter:
-            for i in range(100):
-                plt.plot(x_jitter[i, :, 0])
-            plt.title("Plot of random time-translated events: ±" + str(int(j / 2) * 10) + "ns")
-            plt.show()
-        X_jitter.append(x_jitter)
-
-    losses = []
-    for index, model in enumerate(models):
-        for i, (x, j) in enumerate(zip(X_jitter, jitter)):
-            debug_print(['model', index + 1, '/', len(models), ':', model.name, '- test', i + 1, 'of', len(jitter)])
-            # model = reset_weights(model)
-            history = train(model, x, Y, epochs=epochs, batch_size=16, validation_split=0.2, compile=False, summary=False, callbacks=False)
-            loss = history.history['val_loss']
-            losses.append([j, model.name, round(loss[-1], 3)])
-            linearity_plot(model, data=(x, Y))
-    df = pd.DataFrame(losses, columns=['Jitter', 'Model', 'MAE Loss: ' + str(epochs) + ' epochs'])
-
-    palette = sns.color_palette("rocket_r")
-    g = sns.catplot(data=df, kind='bar', x='Model', y='MAE Loss: ' + str(epochs) + ' epochs', hue='Jitter', errorbar='sd', palette=palette, alpha=0.7, height=6)
-    g.fig.suptitle('Model sensitivity to temporal variation')
-    g.despine(left=True)
-    g.set_axis_labels('', 'Loss (MAE) after ' + str(epochs) + ' epochs')
-    g.legend.set_title('Variation (\u0394t)')
-    plt.show()
-
-
-    
-
-def compare_history(models, metric, title=None):
-    for model in models:
-        plt.plot(model.history.history[metric], label=model.name)
-    plt.legend()
-    plt.xlabel('Epoch')
-    plt.ylabel(metric)
-    plt.title(title)
-    plt.show()
-
-
-def shift_distribution(X, Y):
-    def sigmoid(x): return 1/(1 + np.exp(-x))
-    def func(x): return (1 + sigmoid(10 - x)) / 2 * X.shape[0] / 20
-
-    X_list, Y_list = [], []
-
-    for i in range(20):
-        start_index = int(i * X.shape[0] / 20)
-        end_index = int(start_index + func(i))
-        # print(i, start_index, end_index)
-        X_list.append(X[start_index:end_index])
-        Y_list.append(Y[start_index:end_index])
-    
-    X, Y = np.concatenate(X_list), np.concatenate(Y_list)
-    return X, Y
-
-
+    return      : None
+'''
 def plot_distribution(Y):
     counts, bins = np.histogram(Y)
     plt.stairs(counts / Y.shape[0], bins, color='orange', fill=True)
@@ -390,6 +269,9 @@ def plot_distribution(Y):
     plt.show()
 
 
+'''
+Perform regression-based tasks and experiments
+'''
 def regression():
     np.random.seed(42)
     num_samples = 100000
@@ -411,6 +293,7 @@ def regression():
     np.random.shuffle(data_indices)
     X = X[data_indices][:num_samples]
     X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
+    Y = Y[data_indices][:num_samples]
 
     X = jitter_pulses(X, t=300)
 
@@ -426,7 +309,6 @@ def regression():
     X_fft = np.concatenate([np.expand_dims(fourier_decomposition(x, plot=False), axis=0) for x in tqdm(X)])
     X = np.expand_dims(X, axis=-1)
     X_fft = np.expand_dims(X_fft, axis=-1)
-    Y = Y[data_indices][:num_samples]
 
     '''
     X_dev_train, X_dev_test, Y_train, Y_test = train_test_split(X_dev, Y, test_size=0.2, random_state=42)
@@ -441,6 +323,9 @@ def regression():
     debug_print(['     X_train:', X_train.shape])
     debug_print(['     Y_train:', Y_train.shape])
 
+    ''' 
+    Models
+    
     ten_layer_conv = ConvModel(input_size=700, name='10_layer_conv')
     two_layer_conv = BaselineConvModel(output_size=1).build_model()
     vgg16_small = build_vgg(length=700, name='vgg16_small', width=16)
@@ -451,75 +336,15 @@ def regression():
     two_layer_mlp = BaselineModel(input_size=700, output_size=1, classification=False, name='2_layer_mlp')
     three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
     three_layer_mlp_1090 = MLPModel(input_size=701, output_size=1, classification=False, name='3_layer_mlp_1090')
-    three_layer_mlp_2 = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    '''
 
-    load_model_weights(three_layer_mlp)
-    load_model_weights(three_layer_mlp_2)
-    # load_model_weights(three_layer_mlp_1090)
-
-    train(three_layer_mlp_2, X_fft_train, Y_train, epochs=50)
-    train(three_layer_mlp, X_train, Y_train, epochs=50)
-
-    linearity_plot(three_layer_mlp_2, data=[X_fft_test, Y_test])
-    linearity_plot(three_layer_mlp, data=[X_test, Y_test])
-
-    compare_history([three_layer_mlp, three_layer_mlp_2], metric='val_loss', title='Effect of FFT on ±1500ns time jitter')
-
-    losses = []
-    losses.append(tf.keras.losses.MeanAbsoluteError()(Y_test, tf.transpose(three_layer_mlp(X_test, training=False))))
-    losses.append(tf.keras.losses.MeanAbsoluteError()(Y_test, tf.transpose(three_layer_mlp_2(X_fft_test, training=False))))
+    '''
+    Experiments
+    '''
     
-    plt.figure(figsize=(10, 6))
-    plt.bar(['mlp_no_fft', 'mlp_fft'], losses, color='skyblue')
-    plt.xlabel('Model')
-    plt.ylabel('Mean absolute error')
-    plt.title('Model loss from reducing trainable params (on 20k samples after 200 epochs)')
-    plt.show()
-
-    return
-
-    jitter_test([three_layer_mlp], X_train, Y_train, epochs=25, plot_jitter=False)
-
+        
+    mlp_jitter_test()
     
-
-    '''
-    models = [vgg16, vgg16_small]
-
-    losses = []
-    for model in tqdm(models):
-        x_test = X_1090_test if '1090' in model.name.split('_') else X_test
-        y_test = Y_test
-        load_model_weights(model)
-        loss = tf.keras.losses.MeanAbsoluteError()(y_test, tf.transpose(model(x_test, training=False)))
-        losses.append(loss)
-
-    plt.figure(figsize=(10, 6))
-    plt.bar([model.name for model in models], losses, color='skyblue')
-    plt.xlabel('Model')
-    plt.ylabel('Mean absolute error')
-    plt.title('Model loss from reducing trainable params (on 20k samples after 200 epochs)')
-    plt.show()
-    '''
-
-    '''
-
-    models = [two_layer_mlp, three_layer_mlp, three_layer_mlp_1090, two_layer_conv, ten_layer_conv, vgg16_small, vgg13, vgg16, no_attention_model, attention_model]
-
-    for model in models:
-        x_train = X_1090_train if '1090' in model.name.split('_') else X_train
-        y_train = Y_train
-        train(model, x_train, y_train, epochs=100, batch_size=64, callbacks=False, compile=True)
-        save_model_weights(model)
-
-    for model in models:
-        debug_print(['creating metric plots for', model.name])
-        compare_history([model], metric='val_loss', title=model.name + ' model validation loss over training')
-        linearity_plot(model, data=[np.squeeze(X_test), Y_test])
-
-    compare_history(models, metric='val_loss', title='Model validation loss over training')
-    '''
-
-    # jitter_test([test_model1, test_model2, test_model3, test_model4, baseline_model], X, Y, epochs=100)
 
 
 def channel_classification():

@@ -50,6 +50,38 @@ class ConvModel(tf.keras.Model):
         return x
     
 
+
+class CustomMLPModel(tf.keras.Model):
+    def __init__(self, input_size=None, layer_sizes=[1], classification=False, name='mlp_model'):
+        for size in layer_sizes:
+            name += str(size) + '/'
+        super().__init__(name=name[:-1])
+        
+        self.flatten_layer = tf.keras.layers.Flatten()
+        self.dense_layers = [tf.keras.layers.Dense(size, activation='relu') for size in layer_sizes[:-1]]
+
+        metrics = []
+        self.optimizer = tf.keras.optimizers.Adam()
+        if classification: 
+            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
+            self.loss = tf.keras.losses.BinaryCrossentropy()
+            metrics.append('AUC')
+        else: 
+            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
+            self.loss = tf.keras.losses.MeanAbsoluteError()
+
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
+            self.build((None, input_size, 1))
+
+    def call(self, x):
+        x = self.flatten_layer(x)
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        return x
+    
+
 class MLPModel(tf.keras.Model):
     def __init__(self, input_size=None, output_size=1, classification=False, name='mlp_model'):
         super().__init__(name=name)
