@@ -52,7 +52,7 @@ class ConvModel(tf.keras.Model):
 
 
 class CustomMLPModel(tf.keras.Model):
-    def __init__(self, input_size=None, layer_sizes=[1], classification=False, name='mlp_model'):
+    def __init__(self, input_size=None, layer_sizes=[1], classification=False, name='mlp_model_'):
         for size in layer_sizes:
             name += str(size) + '/'
         super().__init__(name=name[:-1])

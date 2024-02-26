@@ -21,7 +21,7 @@ from vgg import *
 from experiments import *
 
 DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
-DMS_NAME = '../dSSdMS/dMS_230918_gaussgas_700sample_area7000_areafrac0o3_deltamuall50ns_5000each_1e5events_random_centered.npz'
+DMS_NAME = '../dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
 
@@ -73,7 +73,7 @@ Generates a linearity plot based on model and data
 
     return          : None
 '''
-def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1000):
+def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1000, title=''):
     def plot(x, y, err_down, err_up, color='blue', marker='o', title=None):
         plt.plot(x, x, color='black', label='y = x Line')
         plt.errorbar(x, y, yerr=(err_down, err_up), label='\u0394\u03bc Prediction', color=color, marker=marker, linestyle='None')
@@ -82,7 +82,10 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
         plt.ylabel('Median Predicted \u0394\u03bc [ns]')
         plt.title(title)
         plt.legend()
-        plt.show()
+        
+        plt.tight_layout()
+        plt.savefig('figs/' + title)
+        plt.clf()
     
     
     if not data:
@@ -138,7 +141,7 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
         
     plot(np.arange(0, delta_mu * num_delta_mu, delta_mu), 
          prediction_medians, prediction_16, prediction_84, 
-         title=model.name + ' model linearity plot')
+         title=model.name + ' model linearity plot' + title)
 
 '''
 Defines a Gaussian function
@@ -295,13 +298,14 @@ def regression():
     X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
     Y = Y[data_indices][:num_samples]
 
-    X = jitter_pulses(X, t=300)
+    # X = jitter_pulses(X, t=10)
 
-    '''
+    
     X_avg = normalize(np.average(X, axis=0))
     x = np.linspace(0, X.shape[1], X.shape[1])
     params, cov = curve_fit(gaussian, x, X_avg)
     X_dist = gaussian(x, *params)
+    '''
     X_dev = np.concatenate([np.expand_dims(X[i] / X_dist, axis=0) for i in range(X.shape[0])], axis=0)
     X_diff = np.concatenate([np.expand_dims(X[i] - X_dist, axis=0) for i in range(X.shape[0])], axis=0)
     '''
@@ -341,11 +345,71 @@ def regression():
     '''
     Experiments
     '''
+
+    '''
+    three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    three_layer_mlp_2 = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    load_model_weights(three_layer_mlp)
+    # load_model_weights(three_layer_mlp_2)
+
+    X_train_shift, Y_train_shift = shift_distribution(X_train, Y_train)
+    print(X_train_shift.shape)
+
+    train(three_layer_mlp_2, X_train_shift, Y_train_shift, epochs=100)
+
+    linearity_plot(three_layer_mlp, (X_test, Y_test))
+    linearity_plot(three_layer_mlp_2, (X_test, Y_test))
+    '''
     
         
-    mlp_jitter_test()
-    
+    mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=100)
 
+
+    # three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    # load_model_weights(three_layer_mlp)
+
+    # compute_saliency_map(three_layer_mlp, X[0], baseline=0, title='Saliency map of example pulse')
+
+    X_train_jitter = jitter_pulses(X_train, t=300)
+    X_test_jitter = jitter_pulses(X_test, t=300)
+    # train(three_layer_mlp, X_train_jitter, Y_train, epochs=25, batch_size=32)
+
+    '''
+    model_sizes = [
+        [1],
+        [16, 1],
+        [128, 1],
+        [256, 64, 1],
+        [512, 128, 1],
+        [512, 256, 32, 1]
+    ]
+
+    models = [
+        CustomMLPModel(input_size=700, layer_sizes=model_size) for model_size in model_sizes
+    ]
+
+    for size_index, model in enumerate(models):
+        size = model_sizes[size_index]
+        train(model, X_train_jitter, Y_train, epochs=50, batch_size=64)
+        for i in range(25):
+            print('saliency map', i, ':', Y_test[i])
+            delta_mu = Y_test[i]
+            pred_delta_mu = model(np.expand_dims(X_test_jitter[i], axis=0))
+            compute_saliency_map(
+                model, 
+                X_test_jitter[i], 
+                baseline=0,
+                title=f'[2-17-23] Saliency map of example pulse: Pred \u0394mu = {pred_delta_mu[0][0]}ns',
+                label=f'MS pulse (\u0394mu = {delta_mu}ns)',
+                subtitle=f'Model {size}'
+            )
+    '''
+
+    # linearity_plot(three_layer_mlp, data=(X_test, Y_test))
+
+    # train(three_layer_mlp, X_train, Y_train, epochs=50, batch_size=32, compile=True, metrics=[tf.keras.losses.MeanAbsoluteError()])
+
+    # linearity_plot(three_layer_mlp, data=(X_test, Y_test))
 
 def channel_classification():
     num_samples = 1000

@@ -110,7 +110,7 @@ Shifts the relative representation of delta mu categories in data
 '''
 def shift_distribution(X, Y):
     def sigmoid(x): return 1/(1 + np.exp(-x))
-    def func(x): return (1 + sigmoid(10 - x)) / 2 * X.shape[0] / 20
+    def func(x): return (0.2 + sigmoid(5 - x)) / 1.2 * X.shape[0] / 20
 
     X_list, Y_list = [], []
 

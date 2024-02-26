@@ -5,45 +5,61 @@ Performs time jitter test on a list of models
     models          : List of Tensorflow models
     X               : Base X array (pulses)
     Y               : Y array (delta mu)
+    test            : test data
     epochs          : Number of epochs to run
     plot_jitter     : Plot the jittered pulses
+    jitter          : time jitter values
 
     returns         : None
 '''
-def jitter_test(models, X, Y, epochs=100, plot_jitter=True):
+def jitter_test(models, X, Y, test=None, epochs=100, plot_jitter=False, jitter=[0, 10, 50, 200]):
 
     debug_print(['running jitter test'])
 
     sns.set_theme(style="whitegrid")
 
-    jitter = [300]
     X_jitter = []
+    X_jitter_test = []
     for j in jitter:
         x_jitter = jitter_pulses(X, j)
         if plot_jitter:
-            for i in range(100):
+            for i in range(3):
                 plt.plot(x_jitter[i, :, 0])
             plt.title("Plot of random time-translated events: ±" + str(int(j / 2) * 10) + "ns")
             plt.show()
         X_jitter.append(x_jitter)
 
+        if test:
+            x_jitter_test = jitter_pulses(test[0], j)
+            X_jitter_test.append(x_jitter_test)
+
     losses = []
     for index, model in enumerate(models):
         for i, (x, j) in enumerate(zip(X_jitter, jitter)):
             debug_print(['model', index + 1, '/', len(models), ':', model.name, '- test', i + 1, 'of', len(jitter)])
-            # model = reset_weights(model)
+            model = reset_weights(model)
             history = train(model, x, Y, epochs=epochs, batch_size=16, validation_split=0.2, compile=False, summary=False, callbacks=False)
             loss = history.history['val_loss']
             losses.append([j, model.name, round(loss[-1], 3)])
-            linearity_plot(model, data=(x, Y))
+            if not test: linearity_plot(model, data=(x, Y))
+            if test:
+                x_jitter_test = X_jitter_test[i]
+                linearity_plot(model, data=(x_jitter_test, test[1]), title=': ± ' + str(j // 2 * 10) + 'ns')
     df = pd.DataFrame(losses, columns=['Jitter', 'Model', 'MAE Loss: ' + str(epochs) + ' epochs'])
+
+    '''
+    if test:
+        for model in models:
+            for x, j in zip(X_jitter_test, jitter):
+                linearity_plot(model, data=(x, Y), title=': ± ' + str(j // 2 * 10) + 'ns')
+    '''
 
     palette = sns.color_palette("rocket_r")
     g = sns.catplot(data=df, kind='bar', x='Model', y='MAE Loss: ' + str(epochs) + ' epochs', hue='Jitter', errorbar='sd', palette=palette, alpha=0.7, height=6)
     g.figure.suptitle('Model sensitivity to temporal variation')
     g.despine(left=True)
-    g.set_axis_labels('', 'Loss (MAE) after ' + str(epochs) + ' epochs')
-    g.legend.set_title('Variation (\u0394t)')
+    g.set_axis_labels('', 'Loss (MAE) after ' + '100' + ' epochs')
+    g.legend.set_title('Variation (\u0394t, samples)')
     plt.show()
 
 
@@ -156,9 +172,71 @@ def compare_history(models, metric, title=None):
 '''
 Compare MLP parameter sizes against time jitter performance
 '''
-def mlp_jitter_test():
+def mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=50):
     def num_trainable_variables(model):
         return np.sum([np.prod(v.get_shape().as_list()) for v in model.trainable_variables])
 
-    test_mlp = CustomMLPModel(input_size=700, layer_sizes=[100, 10, 1])
+    model_sizes = [
+        [1],
+        [16, 1],
+        [128, 1],
+        [256, 64, 1],
+        [512, 128, 1],
+        [512, 256, 32, 1]
+    ]
+
+    models = [
+        CustomMLPModel(input_size=700, layer_sizes=model_size) for model_size in model_sizes
+    ]
+
+    for model in models:
+        model.summary()
+
+    jitter_test(models, X_train, Y_train, (X_test, Y_test), epochs=epochs, plot_jitter=True, jitter=[0, 20, 100, 200, 300])
     
+
+'''
+Compute saliency map via integrated gradient
+'''
+def compute_saliency_map(model, input_sequence, baseline=None, num_steps=50, title='Saliency map of example pulse', label='MS pulse', subtitle=''):
+    input_sequence = tf.convert_to_tensor(input_sequence, dtype=tf.float32)
+
+    if baseline is None:
+        baseline = tf.zeros_like(input_sequence)
+
+    scaled_inputs = [baseline + (float(i) / num_steps) * (input_sequence - baseline) for i in range(num_steps + 1)]
+    scaled_inputs = tf.stack(scaled_inputs)
+
+    with tf.GradientTape() as tape:
+        tape.watch(scaled_inputs)
+        predictions = model(scaled_inputs)
+    
+    grads = tape.gradient(predictions, scaled_inputs)
+    integrated_gradients = (input_sequence - baseline) * grads.numpy().mean(axis=0)
+
+    saliency_map = np.sum(integrated_gradients, axis=-1)
+
+    fig, axes = plt.subplots(2, 1, figsize=(15, 8), gridspec_kw={'height_ratios': [1, 0.1]})
+
+    # axes[0].plot(baseline, marker='o', label='Baseline', color='blue')
+    
+    axes[0].plot(input_sequence, label=label, color='green')
+    axes[0].set_title(title)
+    axes[0].text(0.5, 0.95, subtitle, horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes, fontsize='smaller', color='gray')
+    axes[0].legend()
+
+    white = np.ones((10, 10))
+    white_im = axes[1].imshow(white, cmap='gray', aspect='auto', extent=[0, 1, 0, 1], vmax=1)
+
+    im = axes[1].imshow([saliency_map], cmap='viridis', aspect='auto', extent=[0, len(input_sequence), 0, 1], vmin=-10, vmax=10)
+    # axes[1].set_title('Saliency Map')
+    axes[1].set_yticks([])
+    cbar = plt.colorbar(white_im, ax=axes[0], orientation='vertical', fraction=0.0001, pad=0.05)
+    cbar = plt.colorbar(im, ax=axes[1], orientation='vertical', fraction=0.046, pad=0.05)
+
+    plt.tight_layout()
+    plt.savefig('figs/' + title + ' ' + subtitle)
+    # plt.show()
+    plt.clf()
+
+    return saliency_map
