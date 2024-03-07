@@ -1,4 +1,6 @@
 import tensorflow as tf
+import tensorflow_decision_forests as tfdf
+import keras_tuner
 import numpy as np
 from vgg import *
 
@@ -54,8 +56,9 @@ class ConvModel(tf.keras.Model):
 class CustomMLPModel(tf.keras.Model):
     def __init__(self, input_size=None, layer_sizes=[1], classification=False, name='mlp_model_'):
         for size in layer_sizes:
-            name += str(size) + '/'
-        super().__init__(name=name[:-1])
+            name += str(size) + '-'
+        name = name[:-1]
+        super().__init__(name=name)
         
         self.flatten_layer = tf.keras.layers.Flatten()
         self.dense_layers = [tf.keras.layers.Dense(size, activation='relu') for size in layer_sizes[:-1]]
@@ -80,6 +83,17 @@ class CustomMLPModel(tf.keras.Model):
             x = layer(x)
         
         return x
+    
+
+def tuner_model(hp):
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.Dense(hp.Choice('units1', [512, 256, 128, 64, 32, 16]), activation='relu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units2', [256, 128, 64, 32, 16, 8]), activation='relu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units3', [256, 128, 64, 32, 16, 8, 1]), activation='relu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units4', [128, 64, 32, 16, 8, 1]), activation='relu'))
+    model.add(tf.keras.layers.Dense(1, activation='linear'))
+    model.compile(loss='mae')
+    return model
     
 
 class MLPModel(tf.keras.Model):

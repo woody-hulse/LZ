@@ -21,7 +21,8 @@ from vgg import *
 from experiments import *
 
 DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
-DMS_NAME = '../dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
+DMS_NAME = '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz'
+DMS_NAME_2 = '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
 
@@ -280,6 +281,7 @@ def regression():
     num_samples = 100000
 
     dMS = DS(DMS_NAME)
+    dMS_2 = DS(DMS_NAME_2)
 
     def normalize(data):
         if np.linalg.norm(data) == 0:
@@ -290,6 +292,8 @@ def regression():
     debug_print(['preprocessing data'])
     X = dMS.DSdata
     Y = np.array(dMS.ULvalues)[:, 1]
+    # X = np.concatenate([dMS.DSdata, dMS_2.DSdata])
+    # Y = np.concatenate([np.array(dMS.ULvalues)[:, 1], np.array(dMS_2.ULvalues)[:, 1]])
     # X, Y = shift_distribution(X, Y)
     # plot_distribution(Y)
     data_indices = np.array([i for i in range(len(X))])
@@ -305,6 +309,7 @@ def regression():
     x = np.linspace(0, X.shape[1], X.shape[1])
     params, cov = curve_fit(gaussian, x, X_avg)
     X_dist = gaussian(x, *params)
+    X_dist = np.expand_dims(X_dist, axis=-1)
     '''
     X_dev = np.concatenate([np.expand_dims(X[i] / X_dist, axis=0) for i in range(X.shape[0])], axis=0)
     X_diff = np.concatenate([np.expand_dims(X[i] - X_dist, axis=0) for i in range(X.shape[0])], axis=0)
@@ -347,7 +352,39 @@ def regression():
     '''
 
     '''
+    X_train = jitter_pulses(X_train, t=10)
+    X_test = jitter_pulses(X_test, t=10)
+
+    tuner = keras_tuner.RandomSearch(tuner_model, objective='val_loss', max_trials=100)
+    tuner.search(np.squeeze(X_train), Y_train, epochs=20, batch_size=32, validation_data=(np.squeeze(X_test), Y_test))
+
+    for model in tuner.get_best_models():
+        model.build(X_test.shape)
+        model.summary()
+    '''
+
+    '''
+    tuner = tfdf.tuner.RandomSearch(num_trials=5, use_predefined_hps=True)
+    model = tfdf.keras.RandomForestModel(verbose=2,tuner=tuner)
+    model.compile(loss=tf.keras.losses.MeanAbsoluteError(), optimizer=tf.keras.optimizers.Adam())
+    
+    train(model, np.squeeze(X_train), Y_train, epochs=1, batch_size=64)
+    '''
+
+    model = CustomMLPModel(input_size=700, layer_sizes=[512, 128, 16, 1], classification=False)
+    train(model, X_fft_train, Y_train, epochs=100, batch_size=64)
+    linearity_plot(model, (X_fft_test, Y_test), num_samples=500, num_delta_mu=30)
+
+
+    '''
+    X_train_jitter = jitter_pulses(X_train, t=300)
+    X_test_jitter = jitter_pulses(X_test, 300)
     three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    load_model_weights(three_layer_mlp)
+
+    train(three_layer_mlp, X_train_jitter, Y_train, epochs=100, batch_size=64)
+    linearity_plot(three_layer_mlp, (X_test_jitter, Y_test), num_samples=500, num_delta_mu=30)
+
     three_layer_mlp_2 = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
     load_model_weights(three_layer_mlp)
     # load_model_weights(three_layer_mlp_2)
@@ -362,17 +399,51 @@ def regression():
     '''
     
         
-    mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=100)
+    # mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=100)
 
+    '''
+    three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    load_model_weights(three_layer_mlp)
 
-    # three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
-    # load_model_weights(three_layer_mlp)
+    inputs = X[0] - X_dist
+    compute_saliency_map(three_layer_mlp, inputs, baseline=X_dist, title='Saliency map of example pulse')
 
-    # compute_saliency_map(three_layer_mlp, X[0], baseline=0, title='Saliency map of example pulse')
+    '''
 
-    X_train_jitter = jitter_pulses(X_train, t=300)
-    X_test_jitter = jitter_pulses(X_test, t=300)
+    '''
+    X_train_jitter = jitter_pulses(X_train, t=400)
+    X_test_jitter = jitter_pulses(X_test, t=400)
     # train(three_layer_mlp, X_train_jitter, Y_train, epochs=25, batch_size=32)
+
+    model = CustomMLPModel(input_size=700, layer_sizes=[512, 128, 32, 1])
+    # save_model_weights(model)
+    # load_model_weights(model)
+    train(model, X_train_jitter, Y_train, epochs=100, batch_size=64)
+    X_train_jitter = jitter_pulses(X_train, t=400)
+    train(model, X_train_jitter, Y_train, epochs=50, batch_size=64)
+    for t in tqdm(range(-150, 150, 10)):
+        x = slide_pulse(X_test[0], -t)
+        delta_mu = Y_test[0]
+        pred_delta_mu = model(np.expand_dims(x, axis=0))
+        compute_saliency_map(
+            model, 
+            x, 
+            baseline=slide_pulse(X_dist, -t),
+            title=f'[3-1-23] Saliency map of example pulse: Pred delta mu = {int(pred_delta_mu[0][0])}ns',
+            label=f'MS pulse (delta mu = {int(delta_mu)}ns)',
+            subtitle=model.name,
+            save_path='gif/' + str(t + 150) + '.png'
+        )
+
+    convert_files_to_gif('gif/', 'saliency_map.gif')
+    '''
+
+    '''
+
+    '''
+
+    # mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=100)
+    
 
     '''
     model_sizes = [
@@ -390,18 +461,18 @@ def regression():
 
     for size_index, model in enumerate(models):
         size = model_sizes[size_index]
-        train(model, X_train_jitter, Y_train, epochs=50, batch_size=64)
+        train(model, X_train_jitter, Y_train, epochs=150, batch_size=64)
         for i in range(25):
             print('saliency map', i, ':', Y_test[i])
             delta_mu = Y_test[i]
             pred_delta_mu = model(np.expand_dims(X_test_jitter[i], axis=0))
             compute_saliency_map(
                 model, 
-                X_test_jitter[i], 
-                baseline=0,
-                title=f'[2-17-23] Saliency map of example pulse: Pred \u0394mu = {pred_delta_mu[0][0]}ns',
-                label=f'MS pulse (\u0394mu = {delta_mu}ns)',
-                subtitle=f'Model {size}'
+                X_test[i] - X_dist, 
+                baseline=X_dist,
+                title=f'[2-17-23] Saliency map of example pulse: Pred delta mu = {int(pred_delta_mu[0][0])}ns',
+                label=f'MS pulse (delta mu = {int(delta_mu)}ns)',
+                subtitle=model.name
             )
     '''
 

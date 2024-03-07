@@ -38,7 +38,7 @@ def jitter_test(models, X, Y, test=None, epochs=100, plot_jitter=False, jitter=[
         for i, (x, j) in enumerate(zip(X_jitter, jitter)):
             debug_print(['model', index + 1, '/', len(models), ':', model.name, '- test', i + 1, 'of', len(jitter)])
             model = reset_weights(model)
-            history = train(model, x, Y, epochs=epochs, batch_size=16, validation_split=0.2, compile=False, summary=False, callbacks=False)
+            history = train(model, x, Y, epochs=epochs, batch_size=64, validation_split=0.2, compile=False, summary=False, callbacks=False)
             loss = history.history['val_loss']
             losses.append([j, model.name, round(loss[-1], 3)])
             if not test: linearity_plot(model, data=(x, Y))
@@ -177,12 +177,12 @@ def mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=50):
         return np.sum([np.prod(v.get_shape().as_list()) for v in model.trainable_variables])
 
     model_sizes = [
-        [1],
         [16, 1],
-        [128, 1],
-        [256, 64, 1],
-        [512, 128, 1],
-        [512, 256, 32, 1]
+        [16, 16, 1],
+        [16, 16, 16, 1],
+        [32, 1],
+        [32, 32, 1],
+        [32, 32, 32, 1]
     ]
 
     models = [
@@ -192,34 +192,84 @@ def mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=50):
     for model in models:
         model.summary()
 
-    jitter_test(models, X_train, Y_train, (X_test, Y_test), epochs=epochs, plot_jitter=True, jitter=[0, 20, 100, 200, 300])
+    jitter_test(models, X_train, Y_train, (X_test, Y_test), epochs=epochs, plot_jitter=False, jitter=[0, 20, 100, 200, 300])
     
 
 '''
 Compute saliency map via integrated gradient
 '''
-def compute_saliency_map(model, input_sequence, baseline=None, num_steps=50, title='Saliency map of example pulse', label='MS pulse', subtitle=''):
-    input_sequence = tf.convert_to_tensor(input_sequence, dtype=tf.float32)
+def compute_saliency_map(model, input_sequence, baseline=None, num_steps=50, title='Saliency map of example pulse', label='MS pulse', subtitle='', save_path='figs/'):
 
     if baseline is None:
-        baseline = tf.zeros_like(input_sequence)
+        baseline = np.zeros_like(input_sequence)
 
-    scaled_inputs = [baseline + (float(i) / num_steps) * (input_sequence - baseline) for i in range(num_steps + 1)]
-    scaled_inputs = tf.stack(scaled_inputs)
+    scaled_inputs = [0 + (float(i) / num_steps) * (input_sequence - 0) for i in range(num_steps + 1)]
+    scaled_inputs = tf.stack(tf.convert_to_tensor(scaled_inputs, dtype=tf.float32))
 
     with tf.GradientTape() as tape:
         tape.watch(scaled_inputs)
-        predictions = model(scaled_inputs)
+        predictions = model(np.expand_dims(baseline, axis=0) + scaled_inputs)
     
     grads = tape.gradient(predictions, scaled_inputs)
     integrated_gradients = (input_sequence - baseline) * grads.numpy().mean(axis=0)
 
     saliency_map = np.sum(integrated_gradients, axis=-1)
 
-    fig, axes = plt.subplots(2, 1, figsize=(15, 8), gridspec_kw={'height_ratios': [1, 0.1]})
+    fig, axes = plt.subplots(2, 1, figsize=(15, 8), gridspec_kw={'height_ratios': [1, 0.1]}, sharex='col')
 
     # axes[0].plot(baseline, marker='o', label='Baseline', color='blue')
     
+    axes[0].plot(baseline, label='Baseline (x\')', linestyle=':')
+
+    axes[0].plot(baseline + input_sequence, label=label, color='green')
+    axes[0].set_title(title)
+    axes[0].text(0.5, 0.95, subtitle, horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes, fontsize='smaller', color='gray')
+    axes[0].legend()
+
+    white = np.ones((10, 10))
+
+    im = axes[1].imshow([saliency_map], cmap='viridis', aspect='auto', extent=[0, len(input_sequence), 0, 1], vmin=-5, vmax=5)
+    # axes[1].set_title('Saliency Map')
+    axes[1].set_yticks([])
+    # cbar = plt.colorbar(white_im, ax=axes[0], orientation='vertical', fraction=0.0001, pad=0.05)
+    cbar = plt.colorbar(im, ax=axes, orientation='vertical', fraction=0.008, pad=-0.02)
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    # plt.show()
+    plt.close()
+
+    return saliency_map
+
+
+'''
+def compute_saliency_map(model, input_sequence, baseline=None, num_steps=50, title='Saliency map of example pulse', label='MS pulse', subtitle=''):
+    # input_sequence = tf.convert_to_tensor(input_sequence, dtype=tf.float32)
+
+    if baseline is None:
+        baseline = tf.zeros_like(input_sequence)
+    
+    scaled_inputs = [baseline + (float(i) / num_steps) * (input_sequence - baseline) for i in range(num_steps + 1)]
+    scaled_inputs = tf.stack(tf.convert_to_tensor(scaled_inputs))
+
+    for i in scaled_inputs.numpy():
+        plt.plot(i[:, 0])
+    plt.show()
+
+    with tf.GradientTape() as tape:
+        tape.watch(scaled_inputs)
+
+        predictions = model(scaled_inputs)
+    gradients = tape.gradient(predictions, scaled_inputs)
+    print(gradients)
+    saliency_map = tf.reduce_mean(gradients, axis=0)
+
+    fig, axes = plt.subplots(2, 1, figsize=(15, 8), gridspec_kw={'height_ratios': [1, 0.1]}, sharex='col')
+
+    # axes[0].plot(baseline, marker='o', label='Baseline', color='blue')
+    
+    axes[0].plot(baseline, label='Baseline (x\')', linestyle=':')
+
     axes[0].plot(input_sequence, label=label, color='green')
     axes[0].set_title(title)
     axes[0].text(0.5, 0.95, subtitle, horizontalalignment='center', verticalalignment='center', transform=plt.gca().transAxes, fontsize='smaller', color='gray')
@@ -228,11 +278,11 @@ def compute_saliency_map(model, input_sequence, baseline=None, num_steps=50, tit
     white = np.ones((10, 10))
     white_im = axes[1].imshow(white, cmap='gray', aspect='auto', extent=[0, 1, 0, 1], vmax=1)
 
-    im = axes[1].imshow([saliency_map], cmap='viridis', aspect='auto', extent=[0, len(input_sequence), 0, 1], vmin=-10, vmax=10)
+    im = axes[1].imshow([saliency_map], cmap='viridis', aspect='auto', extent=[0, len(input_sequence), 0, 1], vmin=-100, vmax=100)
     # axes[1].set_title('Saliency Map')
     axes[1].set_yticks([])
-    cbar = plt.colorbar(white_im, ax=axes[0], orientation='vertical', fraction=0.0001, pad=0.05)
-    cbar = plt.colorbar(im, ax=axes[1], orientation='vertical', fraction=0.046, pad=0.05)
+    # cbar = plt.colorbar(white_im, ax=axes[0], orientation='vertical', fraction=0.0001, pad=0.05)
+    cbar = plt.colorbar(im, ax=axes, orientation='vertical', fraction=0.008, pad=-0.02)
 
     plt.tight_layout()
     plt.savefig('figs/' + title + ' ' + subtitle)
@@ -240,3 +290,4 @@ def compute_saliency_map(model, input_sequence, baseline=None, num_steps=50, tit
     plt.clf()
 
     return saliency_map
+'''

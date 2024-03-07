@@ -3,6 +3,7 @@ from matplotlib import pyplot as plt
 from scipy.stats import norm
 import tensorflow as tf
 
+import imageio
 from tqdm import tqdm
 import os
 import datetime
@@ -66,6 +67,16 @@ def jitter_pulses(pulses, t=50):
         jitter_pulses.append(np.expand_dims(jitter_pulse, axis=-1))
     
     return np.expand_dims(np.concatenate(jitter_pulses, axis=-1).T, axis=-1)
+
+
+'''
+Slide pulse by some amount t
+'''
+def slide_pulse(pulse, t):
+    pulse = np.squeeze(pulse)
+    if t < 0: pulse = np.concatenate([np.zeros(-t), pulse[:t]], axis=-1)
+    else: pulse = np.concatenate([pulse[t:], np.zeros(t)], axis=-1)
+    return np.expand_dims(pulse, axis=-1)
 
 '''
 Take fast fourier decomposition of pulse data
@@ -260,3 +271,22 @@ if __name__ == '__main__':
     pulses = create_simulated_pulses(100, 700)
     print(pulses)
     plot_simulated_pulses(pulses)
+
+
+def convert_files_to_gif(directory, name):
+    images = []
+    for filename in sorted(os.listdir(directory)):
+        if filename.endswith(('.png', '.jpg', '.jpeg')):
+            file_path = os.path.join(directory, filename)
+            images.append(imageio.imread(file_path))
+
+    with imageio.get_writer(f'{directory}{name}', mode='I') as writer:
+        for filename in sorted(os.listdir(directory)):
+            if filename.endswith(('.png', '.jpg', '.jpeg')):
+                image = imageio.imread(directory + filename)
+                writer.append_data(image)
+    
+    for filename in os.listdir(directory):
+        file_path = os.path.join(directory, filename)
+        if os.path.isfile(file_path) and filename != name:
+            os.remove(file_path)
