@@ -1,5 +1,7 @@
 import numpy as np
-from matplotlib import pyplot as plt
+from matplotlib import pyplot as pl
+import seaborn as sns
+sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
 from scipy.stats import norm
 import tensorflow as tf
 
@@ -7,6 +9,7 @@ import imageio
 from tqdm import tqdm
 import os
 import datetime
+import json
 
 
 '''

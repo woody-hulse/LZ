@@ -21,12 +21,11 @@ from vgg import *
 from experiments import *
 
 DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
+DMS_NAME = '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
 DMS_NAMES = [
     '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
     '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz'
 ]
-
-# '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
 
@@ -265,7 +264,7 @@ Perform regression-based tasks and experiments
 '''
 def regression():
     np.random.seed(42)
-    num_samples = 200000
+    num_samples = 2000
 
     def normalize(data):
         if np.linalg.norm(data) == 0:
@@ -275,7 +274,7 @@ def regression():
 
     debug_print(['preprocessing data'])
     
-    X, Y = concat_data([DMS_NAMES])
+    X, Y = concat_data(DMS_NAMES)
     # X, Y = shift_distribution(X, Y)
     # plot_distribution(Y)
     data_indices = np.array([i for i in range(len(X))])
@@ -337,13 +336,12 @@ def regression():
     X_train = jitter_pulses(X_train, t=10)
     X_test = jitter_pulses(X_test, t=10)
 
-    tuner = keras_tuner.RandomSearch(tuner_model, objective='val_loss', max_trials=100)
-    tuner.search(np.squeeze(X_train), Y_train, epochs=20, batch_size=32, validation_data=(np.squeeze(X_test), Y_test))
-
-    for model in tuner.get_best_models():
-        model.build(X_test.shape)
-        model.summary()
     '''
+
+    tuner = keras_tuner.RandomSearch(tuner_model, objective='val_loss', max_trials=3)
+    tuner.search(np.squeeze(X_train), Y_train, epochs=2, batch_size=32, validation_data=(np.squeeze(X_test), Y_test))
+
+    plot_parameter_performance('untitled_project/', title='Number of Parameters vs. Training Performance [val MAE] 3/9/24')
 
     '''
     tuner = tfdf.tuner.RandomSearch(num_trials=5, use_predefined_hps=True)

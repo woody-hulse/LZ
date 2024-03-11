@@ -87,10 +87,10 @@ class CustomMLPModel(tf.keras.Model):
 
 def tuner_model(hp):
     model = tf.keras.Sequential()
-    model.add(tf.keras.layers.Dense(hp.Choice('units1', [700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200]), activation='selu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units2', [500, 450, 400, 350, 300, 250, 200, 150, 100]), activation='selu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units3', [300, 250, 200, 150, 100, 50, 1]), activation='selu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units4', [300, 250, 200, 150, 100, 50, 1]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units1', [700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100, 50]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units2', [600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100, 50]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units3', [500, 450, 400, 350, 300, 250, 200, 150, 100, 50, 1]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units4', [400, 350, 300, 250, 200, 150, 100, 50, 1]), activation='selu'))
     model.add(tf.keras.layers.Dense(1, activation='linear'))
     model.compile(loss='mae')
     return model

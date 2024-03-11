@@ -1,4 +1,5 @@
 from main import *
+sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
 
 '''
 Performs time jitter test on a list of models
@@ -291,3 +292,30 @@ def compute_saliency_map(model, input_sequence, baseline=None, num_steps=50, tit
 
     return saliency_map
 '''
+
+
+'''
+Plot parameter/peformance tradeoff from keras tuner
+'''
+def plot_parameter_performance(path, lim=200, title='Number of Parameters vs. Training Performance'):
+    parameters = []
+    losses = []
+    for dir in os.listdir(path):
+        num_parameters = 0
+        num_previous = 700
+        if os.path.isfile(path + dir): continue
+        with open(path + dir + '/trial.json') as f:
+            trial = json.load(f)
+            loss = trial['score']
+            if loss > lim: continue
+            for value in trial['hyperparameters']['values'].values():
+                num_parameters += num_previous * value + value
+                num_previous = value
+            num_parameters += num_previous + 1
+            parameters.append(num_parameters)
+            losses.append(loss)
+    
+    plt.scatter(parameters, losses, lw=2)
+    plt.xscale('log')
+    plt.title(title)
+    plt.show()
