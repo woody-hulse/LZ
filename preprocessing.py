@@ -8,6 +8,25 @@ from tqdm import tqdm
 import os
 import datetime
 
+
+'''
+Data structure for hosting DS data and associated UL values
+    self.DSdata     : Pulse height in phd (photons detected)
+    self.ULvalues   : Pulse information
+'''
+class DS():
+    def __init__(self, DSname):
+        self.DSname = DSname
+        self.DStype = 'test'
+
+        path = self.DSname
+        with np.load(path) as f:
+            debug_print(['loading', self.DStype, 'data from', path])
+            fkeys = f.files
+            self.DSdata = f[fkeys[0]]       # arraysize =（event * 700 samples)
+            self.ULvalues = f[fkeys[1]]     # arraysize =（event * 4 underlying parameters)
+
+
 '''
 Custom 'print' function
     statements      : Print statements
@@ -134,6 +153,21 @@ def shift_distribution(X, Y):
     
     X, Y = np.concatenate(X_list), np.concatenate(Y_list)
     return X, Y
+
+
+'''
+Concatenates data from multiple filepaths
+'''
+def concat_data(paths):
+    X_list = []
+    Y_list = []
+    for path in paths:
+        ds = DS(path)
+        X_list.append(ds.DSdata)
+        Y_list.append(np.array(ds.ULvalues[:, 1]))
+    
+    return np.concatenate(X_list), np.concatenate(Y_list)
+
 
 '''
 *unused*

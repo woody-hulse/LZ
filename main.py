@@ -21,27 +21,14 @@ from vgg import *
 from experiments import *
 
 DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
-DMS_NAME = '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz'
-DMS_NAME_2 = '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
+DMS_NAMES = [
+    '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
+    '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz'
+]
+
+# '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
-
-'''
-Data structure for hosting DS data and associated UL values
-    self.DSdata     : Pulse height in phd (photons detected)
-    self.ULvalues   : Pulse information
-'''
-class DS():
-    def __init__(self, DSname):
-        self.DSname = DSname
-        self.DStype = 'test'
-
-        path = self.DSname
-        with np.load(path) as f:
-            debug_print(['loading', self.DStype, 'data from', path])
-            fkeys = f.files
-            self.DSdata = f[fkeys[0]]       # arraysize =（event * 700 samples)
-            self.ULvalues = f[fkeys[1]]     # arraysize =（event * 4 underlying parameters)
 
 
 
@@ -278,10 +265,7 @@ Perform regression-based tasks and experiments
 '''
 def regression():
     np.random.seed(42)
-    num_samples = 100000
-
-    dMS = DS(DMS_NAME)
-    dMS_2 = DS(DMS_NAME_2)
+    num_samples = 200000
 
     def normalize(data):
         if np.linalg.norm(data) == 0:
@@ -290,10 +274,8 @@ def regression():
         else: return data / np.linalg.norm(data)
 
     debug_print(['preprocessing data'])
-    X = dMS.DSdata
-    Y = np.array(dMS.ULvalues)[:, 1]
-    # X = np.concatenate([dMS.DSdata, dMS_2.DSdata])
-    # Y = np.concatenate([np.array(dMS.ULvalues)[:, 1], np.array(dMS_2.ULvalues)[:, 1]])
+    
+    X, Y = concat_data([DMS_NAMES])
     # X, Y = shift_distribution(X, Y)
     # plot_distribution(Y)
     data_indices = np.array([i for i in range(len(X))])
@@ -315,17 +297,17 @@ def regression():
     X_diff = np.concatenate([np.expand_dims(X[i] - X_dist, axis=0) for i in range(X.shape[0])], axis=0)
     '''
 
+    '''
     X_fft = np.concatenate([np.expand_dims(fourier_decomposition(x, plot=False), axis=0) for x in tqdm(X)])
-    X = np.expand_dims(X, axis=-1)
     X_fft = np.expand_dims(X_fft, axis=-1)
 
-    '''
     X_dev_train, X_dev_test, Y_train, Y_test = train_test_split(X_dev, Y, test_size=0.2, random_state=42)
     X_diff_train, X_diff_test, Y_train, Y_test = train_test_split(X_diff, Y, test_size=0.2, random_state=42)
     '''
 
+    X = np.expand_dims(X, axis=-1)
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-    X_fft_train, X_fft_test, Y_train, Y_test = train_test_split(X_fft, Y, test_size=0.2, random_state=42)
+    # X_fft_train, X_fft_test, Y_train, Y_test = train_test_split(X_fft, Y, test_size=0.2, random_state=42)
     # X_1090_train = add_1090(X_train)
     # X_1090_test = add_1090(X_test)
 
@@ -371,9 +353,9 @@ def regression():
     train(model, np.squeeze(X_train), Y_train, epochs=1, batch_size=64)
     '''
 
-    model = CustomMLPModel(input_size=700, layer_sizes=[512, 128, 16, 1], classification=False)
-    train(model, X_fft_train, Y_train, epochs=100, batch_size=64)
-    linearity_plot(model, (X_fft_test, Y_test), num_samples=500, num_delta_mu=30)
+    # model = CustomMLPModel(input_size=700, layer_sizes=[512, 128, 16, 1], classification=False)
+    # train(model, X_fft_train, Y_train, epochs=100, batch_size=64)
+    # linearity_plot(model, (X_fft_test, Y_test), num_samples=500, num_delta_mu=30)
 
 
     '''

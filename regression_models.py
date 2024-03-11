@@ -87,10 +87,10 @@ class CustomMLPModel(tf.keras.Model):
 
 def tuner_model(hp):
     model = tf.keras.Sequential()
-    model.add(tf.keras.layers.Dense(hp.Choice('units1', [512, 256, 128, 64, 32, 16]), activation='relu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units2', [256, 128, 64, 32, 16, 8]), activation='relu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units3', [256, 128, 64, 32, 16, 8, 1]), activation='relu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units4', [128, 64, 32, 16, 8, 1]), activation='relu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units1', [700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units2', [500, 450, 400, 350, 300, 250, 200, 150, 100]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units3', [300, 250, 200, 150, 100, 50, 1]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units4', [300, 250, 200, 150, 100, 50, 1]), activation='selu'))
     model.add(tf.keras.layers.Dense(1, activation='linear'))
     model.compile(loss='mae')
     return model
