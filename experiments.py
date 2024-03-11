@@ -297,25 +297,82 @@ def compute_saliency_map(model, input_sequence, baseline=None, num_steps=50, tit
 '''
 Plot parameter/peformance tradeoff from keras tuner
 '''
-def plot_parameter_performance(path, lim=200, title='Number of Parameters vs. Training Performance'):
+def plot_parameter_performance(paths, lim=200, title='Number of Parameters vs. Training Performance'):
     parameters = []
     losses = []
-    for dir in os.listdir(path):
-        num_parameters = 0
-        num_previous = 700
-        if os.path.isfile(path + dir): continue
-        with open(path + dir + '/trial.json') as f:
-            trial = json.load(f)
-            loss = trial['score']
-            if loss > lim: continue
-            for value in trial['hyperparameters']['values'].values():
-                num_parameters += num_previous * value + value
-                num_previous = value
-            num_parameters += num_previous + 1
-            parameters.append(num_parameters)
-            losses.append(loss)
+    for path in paths:
+        for dir in os.listdir(path):
+            num_parameters = 0
+            num_previous = 700
+            if os.path.isfile(path + dir): continue
+            with open(path + dir + '/trial.json') as f:
+                trial = json.load(f)
+                loss = trial['score']
+                if loss > lim: continue
+                for value in trial['hyperparameters']['values'].values():
+                    num_parameters += num_previous * value + value
+                    num_previous = value
+                num_parameters += num_previous + 1
+                parameters.append(num_parameters)
+                losses.append(loss)
     
     plt.scatter(parameters, losses, lw=2)
     plt.xscale('log')
     plt.title(title)
     plt.show()
+
+
+'''
+Determine output as a function of jitter
+'''
+def jitter_function_plot(model, X_train, Y_train, X_test, Y_test):
+    X_train_jitter = jitter_pulses(X_train, t=400)
+    X_test_jitter = jitter_pulses(X_test, t=400)
+    # train(three_layer_mlp, X_train_jitter, Y_train, epochs=25, batch_size=32)
+
+    # save_model_weights(model)
+    # load_model_weights(model)
+    train(model, X_train_jitter, Y_train, epochs=100, batch_size=64)
+
+    jitters = np.zeros(300 // 5)
+    delta_mu_vs_jitter = np.zeros((200, 300 // 5))
+    for i in tqdm(range(200)):
+        for j, t in enumerate(range(-150, 150, 5)):
+            jitters[j] = t
+            x = slide_pulse(X_test[i], -t)
+            delta_mu = Y_test[i]
+            pred_delta_mu = model(np.expand_dims(x, axis=0))
+            delta_mu_vs_jitter[i][j] = int(pred_delta_mu) - delta_mu
+    
+    mean_delta_mu_vs_jitter = np.mean(delta_mu_vs_jitter, axis=0)
+    err = np.std(delta_mu_vs_jitter, axis=0)
+    plt.fill_between(jitters, mean_delta_mu_vs_jitter-err, mean_delta_mu_vs_jitter+err, color=(0.1, 0.2, 0.5, 0.3))
+    plt.plot(jitters, mean_delta_mu_vs_jitter)
+        
+    plt.title('Jitter effect on predicted delta mu deviation (16/1) [3/6/24]')
+    plt.ylabel('Deviation from true delta mu')
+    plt.xlabel('Jitter amount')
+    plt.show()
+
+
+'''
+Plot saliency map as a function of jitter
+'''
+def saliency_map_jitter(model, X_train, Y_train, X_test, Y_test, X_dist):
+    X_train_jitter = jitter_pulses(X_train, t=400)
+    train(model, X_train_jitter, Y_train, epochs=100, batch_size=64)
+    for t in tqdm(range(-150, 150, 10)):
+        x = slide_pulse(X_test[0], -t)
+        delta_mu = Y_test[0]
+        pred_delta_mu = model(np.expand_dims(x, axis=0))
+        compute_saliency_map(
+            model, 
+            x, 
+            baseline=slide_pulse(X_dist, -t),
+            title=f'[3-1-23] Saliency map of example pulse: Pred delta mu = {int(pred_delta_mu[0][0])}ns',
+            label=f'MS pulse (delta mu = {int(delta_mu)}ns)',
+            subtitle=model.name,
+            save_path='gif/' + str(t + 150) + '.png'
+        )
+
+    convert_files_to_gif('gif/', 'saliency_map.gif')

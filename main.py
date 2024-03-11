@@ -23,9 +23,11 @@ from experiments import *
 DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
 DMS_NAME = '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
 DMS_NAMES = [
-    '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
-    '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz'
+    '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
+    '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz'
 ]
+
+# '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
 
@@ -264,7 +266,7 @@ Perform regression-based tasks and experiments
 '''
 def regression():
     np.random.seed(42)
-    num_samples = 2000
+    num_samples = 100000
 
     def normalize(data):
         if np.linalg.norm(data) == 0:
@@ -338,10 +340,10 @@ def regression():
 
     '''
 
-    tuner = keras_tuner.RandomSearch(tuner_model, objective='val_loss', max_trials=3)
-    tuner.search(np.squeeze(X_train), Y_train, epochs=2, batch_size=32, validation_data=(np.squeeze(X_test), Y_test))
+    # tuner = keras_tuner.RandomSearch(tuner_model, objective='val_loss', max_trials=100)
+    # tuner.search(np.squeeze(X_train), Y_train, epochs=35, batch_size=128, validation_data=(np.squeeze(X_test), Y_test))
 
-    plot_parameter_performance('untitled_project/', title='Number of Parameters vs. Training Performance [val MAE] 3/9/24')
+    # plot_parameter_performance(['../untitled_project_2/', 'untitled_project/'], title='Number of Parameters vs. Training Performance [val MAE] [3/9/24]')
 
     '''
     tuner = tfdf.tuner.RandomSearch(num_trials=5, use_predefined_hps=True)
@@ -390,31 +392,12 @@ def regression():
 
     '''
 
+    model = CustomMLPModel(700, [512, 256, 64, 1])
+    train(model, X_train, Y_train, epochs=100, batch_size=64)
+    linearity_plot(model, (X_test, Y_test), title=model.name + ' linearity test [new data]')
+        
+    
     '''
-    X_train_jitter = jitter_pulses(X_train, t=400)
-    X_test_jitter = jitter_pulses(X_test, t=400)
-    # train(three_layer_mlp, X_train_jitter, Y_train, epochs=25, batch_size=32)
-
-    model = CustomMLPModel(input_size=700, layer_sizes=[512, 128, 32, 1])
-    # save_model_weights(model)
-    # load_model_weights(model)
-    train(model, X_train_jitter, Y_train, epochs=100, batch_size=64)
-    X_train_jitter = jitter_pulses(X_train, t=400)
-    train(model, X_train_jitter, Y_train, epochs=50, batch_size=64)
-    for t in tqdm(range(-150, 150, 10)):
-        x = slide_pulse(X_test[0], -t)
-        delta_mu = Y_test[0]
-        pred_delta_mu = model(np.expand_dims(x, axis=0))
-        compute_saliency_map(
-            model, 
-            x, 
-            baseline=slide_pulse(X_dist, -t),
-            title=f'[3-1-23] Saliency map of example pulse: Pred delta mu = {int(pred_delta_mu[0][0])}ns',
-            label=f'MS pulse (delta mu = {int(delta_mu)}ns)',
-            subtitle=model.name,
-            save_path='gif/' + str(t + 150) + '.png'
-        )
-
     convert_files_to_gif('gif/', 'saliency_map.gif')
     '''
 
@@ -423,38 +406,6 @@ def regression():
     '''
 
     # mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=100)
-    
-
-    '''
-    model_sizes = [
-        [1],
-        [16, 1],
-        [128, 1],
-        [256, 64, 1],
-        [512, 128, 1],
-        [512, 256, 32, 1]
-    ]
-
-    models = [
-        CustomMLPModel(input_size=700, layer_sizes=model_size) for model_size in model_sizes
-    ]
-
-    for size_index, model in enumerate(models):
-        size = model_sizes[size_index]
-        train(model, X_train_jitter, Y_train, epochs=150, batch_size=64)
-        for i in range(25):
-            print('saliency map', i, ':', Y_test[i])
-            delta_mu = Y_test[i]
-            pred_delta_mu = model(np.expand_dims(X_test_jitter[i], axis=0))
-            compute_saliency_map(
-                model, 
-                X_test[i] - X_dist, 
-                baseline=X_dist,
-                title=f'[2-17-23] Saliency map of example pulse: Pred delta mu = {int(pred_delta_mu[0][0])}ns',
-                label=f'MS pulse (delta mu = {int(delta_mu)}ns)',
-                subtitle=model.name
-            )
-    '''
 
     # linearity_plot(three_layer_mlp, data=(X_test, Y_test))
 
