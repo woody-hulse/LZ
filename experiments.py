@@ -308,13 +308,15 @@ def plot_parameter_performance(paths, lim=200, title='Number of Parameters vs. T
             with open(path + dir + '/trial.json') as f:
                 trial = json.load(f)
                 loss = trial['score']
-                if loss > lim: continue
-                for value in trial['hyperparameters']['values'].values():
-                    num_parameters += num_previous * value + value
-                    num_previous = value
-                num_parameters += num_previous + 1
-                parameters.append(num_parameters)
-                losses.append(loss)
+                try:
+                    if loss > lim: continue
+                    for value in trial['hyperparameters']['values'].values():
+                        num_parameters += num_previous * value + value
+                        num_previous = value
+                    num_parameters += num_previous + 1
+                    parameters.append(num_parameters)
+                    losses.append(loss)
+                except: continue
     
     plt.scatter(parameters, losses, lw=2)
     plt.xscale('log')

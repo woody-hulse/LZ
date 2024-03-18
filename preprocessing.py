@@ -1,9 +1,10 @@
 import numpy as np
-from matplotlib import pyplot as pl
+from matplotlib import pyplot as plt
 import seaborn as sns
 sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
 from scipy.stats import norm
 import tensorflow as tf
+from scipy.optimize import curve_fit
 
 import imageio
 from tqdm import tqdm
@@ -170,6 +171,38 @@ def concat_data(paths):
         Y_list.append(np.array(ds.ULvalues[:, 1]))
     
     return np.concatenate(X_list), np.concatenate(Y_list)
+
+
+'''
+Defines a Gaussian function
+    X               : Range of x values
+    C               : Coefficient
+    sigma           : Std of Gaussian
+
+    return          : Gaussian distribution on x samples
+'''
+def gaussian(X, C, mu, sigma):
+    return C*np.exp(-(X-mu)**2/(2*sigma**2))
+
+
+'''
+Converts pulses to relative deviation
+'''
+def get_relative_deviation(X):
+    X_dev = np.empty(X.shape)
+    X_params = np.empty((X.shape[0], 3))
+    epsilon = np.ones_like(X[0]) * 1e-5
+    for i in tqdm(range(X.shape[0])):
+        x = np.linspace(0, X.shape[1], X.shape[1])
+        y = X[i, :, 0]
+        params, cov = curve_fit(gaussian, x, y, p0=[0.1, 350, 50])
+        X_params[i] = np.array([params])
+        X_fit = np.expand_dims(gaussian(x, *params), axis=-1)
+        X_dev[i] = X[i] / (X_fit + epsilon)
+
+    return X_dev, X_params
+
+
 
 
 '''

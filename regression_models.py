@@ -87,13 +87,26 @@ class CustomMLPModel(tf.keras.Model):
 
 def tuner_model(hp):
     model = tf.keras.Sequential()
-    model.add(tf.keras.layers.Dense(hp.Choice('units1', [300, 250, 200, 150, 100, 75, 50, 25, 10]), activation='selu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units2', [300, 250, 200, 150, 100, 75, 50, 25, 10, 5]), activation='selu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units3', [300, 250, 200, 150, 100, 75, 50, 25, 10, 5]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units1', [150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    model.add(tf.keras.layers.Dense(hp.Choice('units2', [100, 75, 50, 25, 15, 10, 5]), activation='selu'))
     model.add(tf.keras.layers.Dense(1, activation='linear'))
     model.compile(loss='mae')
     return model
     
+'''
+def tuner_model(hp):
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.Dense(hp.Choice('units1', [700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    if hp.Boolean('layer2'):
+        model.add(tf.keras.layers.Dense(hp.Choice('units2', [600, 550, 500, 450, 400, 350, 300, 250, 200, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    if hp.Boolean('layer3'):
+        model.add(tf.keras.layers.Dense(hp.Choice('units3', [500, 450, 400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    if hp.Boolean('layer4'):
+        model.add(tf.keras.layers.Dense(hp.Choice('units4', [400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    model.add(tf.keras.layers.Dense(1, activation='linear'))
+    model.compile(loss='mae')
+    return model
+'''
 
 class MLPModel(tf.keras.Model):
     def __init__(self, input_size=None, output_size=1, classification=False, name='mlp_model'):
@@ -436,3 +449,122 @@ class HybridModel(tf.keras.Model):
         x = self.output_layer(x)
 
         return x
+    
+
+class RelativeError(tf.keras.losses.MeanAbsolutePercentageError):
+    def __init__(self, e=1e-5):
+        super().__init__()
+        self.e = e
+    
+    def __call__(self, y, y_hat):
+        epsilon = tf.ones_like(y) * self.e
+        return super.__call__(y + epsilon, y_hat + epsilon)
+    
+
+class Autoencoder(tf.keras.Model):
+    def __init__(self, input_size=None, encoder_layer_sizes=[1], decoder_layer_sizes=[700], name='mlp_encoder_'):
+        for size in encoder_layer_sizes:
+            name += str(size) + '-'
+        name = name[:-1]
+        super().__init__(name=name)
+        
+        self.flatten_layer = tf.keras.layers.Flatten()
+
+        self.encoder = tf.keras.Sequential()
+        for layer_size in encoder_layer_sizes[:-1]:
+            self.encoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
+        self.encoder.add(tf.keras.layers.Dense(encoder_layer_sizes[-1], activation='linear'))
+
+        self.decoder = tf.keras.Sequential()
+        for layer_size in decoder_layer_sizes[:-1]:
+            self.decoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
+        self.decoder.add(tf.keras.layers.Dense(decoder_layer_sizes[-1], activation='linear'))
+        
+        self.loss = tf.keras.losses.MeanAbsolutePercentageError()
+        self.optimizer = tf.keras.optimizers.Adam()
+
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss)
+            self.build((None, input_size, 1))
+
+    def call(self, x):
+        x = self.flatten_layer(x)
+        x = self.encoder(x)
+        x = self.decoder(x)
+        
+        return x
+    
+    def encode(self, x):
+        x = self.flatten_layer(x)
+        x = self.encoder(x)
+
+        return np.expand_dims(x.numpy(), axis=-1)
+
+
+class VariationalAutoencoder(tf.keras.Model):
+    def __init__(self, input_size=None, encoder_layer_sizes=[1], decoder_layer_sizes=[700], name='vae_'):
+        for size in encoder_layer_sizes:
+            name += str(size) + '-'
+        name = name[:-1]
+        super().__init__(name=name)
+        
+        self.flatten_layer = tf.keras.layers.Flatten()
+
+        self.encoder = tf.keras.Sequential()
+        for layer_size in encoder_layer_sizes[:-1]:
+            self.encoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
+        # Split the encoder output into two parameters: means and log variances
+        self.encoder.add(tf.keras.layers.Dense(encoder_layer_sizes[-1], activation='linear'))
+
+        self.decoder = tf.keras.Sequential()
+        for layer_size in decoder_layer_sizes[:-1]:
+            self.decoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
+        self.decoder.add(tf.keras.layers.Dense(decoder_layer_sizes[-1], activation='linear'))
+        
+        self.optimizer = tf.keras.optimizers.Adam()
+
+        if input_size:
+            self.compile(optimizer=self.optimizer)
+            self.build((None, input_size))
+    
+    def encode(self, x):
+        x = self.flatten_layer(x)
+        encoder_output = self.encoder(x)
+        z_mean, z_log_var = tf.split(encoder_output, num_or_size_splits=2, axis=1)
+        return z_mean, z_log_var
+
+    def reparameterize(self, z_mean, z_log_var):
+        batch = tf.shape(z_mean)[0]
+        dim = tf.shape(z_mean)[1]
+        epsilon = tf.keras.backend.random_normal(shape=(batch, dim))
+        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+
+    def decode(self, z, apply_sigmoid=False):
+        logits = self.decoder(z)
+        if apply_sigmoid:
+            probs = tf.sigmoid(logits)
+            return probs
+        return logits
+    
+    def call(self, x):
+        z_mean, z_log_var = self.encode(x)
+        z = self.reparameterize(z_mean, z_log_var)
+        x_recon = self.decode(z)
+        return x_recon, z_mean, z_log_var
+
+    def compute_loss(self, x):
+        x = self.flatten_layer(x)
+        z_mean, z_log_var = self.encode(x)
+        z = self.reparameterize(z_mean, z_log_var)
+        x_recon = self.decode(z)
+        recon_loss = tf.reduce_mean(tf.reduce_sum(tf.keras.losses.binary_crossentropy(x, x_recon), axis=(1, 2)))
+        kl_loss = -0.5 * tf.reduce_mean(tf.reduce_sum(1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var), axis=1))
+        total_loss = recon_loss + kl_loss
+        return total_loss
+
+    def train_step(self, data):
+        with tf.GradientTape() as tape:
+            loss = self.compute_loss(data)
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        return {'loss': loss}

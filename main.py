@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from collections import Counter
+import sys
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -11,7 +12,6 @@ from sklearn.preprocessing import normalize
 from sklearn.metrics import roc_auc_score
 from sklearn.metrics import roc_curve
 from scipy.stats import norm
-from scipy.optimize import curve_fit
 
 from preprocessing import *
 # from models import *
@@ -24,7 +24,8 @@ DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_ce
 DMS_NAME = '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
 DMS_NAMES = [
     '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
-    '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz'
+    # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz',
+    # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch02.npz'
 ]
 
 # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
@@ -131,17 +132,6 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
     plot(np.arange(0, delta_mu * num_delta_mu, delta_mu), 
          prediction_medians, prediction_16, prediction_84, 
          title=model.name + ' model linearity plot' + title)
-
-'''
-Defines a Gaussian function
-    X               : Range of x values
-    C               : Coefficient
-    sigma           : Std of Gaussian
-
-    return          : Gaussian distribution on x samples
-'''
-def gaussian(X, C, sigma):
-    return C*np.exp(-(X-350)**2/(2*sigma**2))
 
 '''
 Reset learned model weights to initialization
@@ -266,7 +256,7 @@ Perform regression-based tasks and experiments
 '''
 def regression():
     np.random.seed(42)
-    num_samples = 100000
+    num_samples = 100000  
 
     def normalize(data):
         if np.linalg.norm(data) == 0:
@@ -340,10 +330,79 @@ def regression():
 
     '''
 
+    '''
+
+    X_dev, X_params = get_relative_deviation(X_train)
+
+    latent_size = 512
+    autoencoder = AutoEncoder(
+        input_size=700, 
+        encoder_layer_sizes=[latent_size],
+        decoder_layer_sizes=[700]
+    )
+
+    # regression_model_large = CustomMLPModel(input_size=700, layer_sizes=[512, 256, 64, 1])
+    regression_model_small = CustomMLPModel(input_size=latent_size, layer_sizes=[8, 1])
+
+    train(autoencoder, X_dev, X_dev, epochs=3, batch_size=64)
+
+    for x, params in zip(X_train[:2], X_params[:2]):
+        a = np.linspace(0, X.shape[1], X.shape[1])
+        x_p = x[:, 0] * gaussian(a, *params) / params[0]
+        plt.plot(x, label='Original Pulse')
+        plt.plot(x_p, label='Reconstructed Pulse')
+        plt.legend()
+        plt.show()
+
+    return
+
+    '''
+
+    latent_size = 32
+    autoencoder = Autoencoder(
+        input_size=700, 
+        encoder_layer_sizes=[512, 256, latent_size],
+        decoder_layer_sizes=[256, 700]
+    )
+
+    '''
+    variational_autoencoder = VariationalAutoencoder(
+        input_size=700, 
+        encoder_layer_sizes=[512, 256, latent_size],
+        decoder_layer_sizes=[256, 700]
+    )
+    for i in range(10):
+        variational_autoencoder.train_step(X_train)
+    '''
+
+    train(autoencoder, X_train, X_train, epochs=32, batch_size=64)
+
+    for x in X_test[:2]:
+        plt.plot(x, label='Original Pulse')
+        plt.plot(autoencoder(np.array([x]))[0], label='Reconstructed Pulse')
+        plt.legend()
+        plt.show()
+
+    encoded_X_train = np.array(autoencoder.encode(X_train), dtype=np.float16)
+    debug_print(['Size before compression:', sys.getsizeof(X_train), 'bytes\n',
+                 'Size after compression:', sys.getsizeof(encoded_X_train), 'bytes'])
+
+    regression_model_small = CustomMLPModel(input_size=latent_size, layer_sizes=[64, 64, 1])
+
+    train(regression_model_small, encoded_X_train, Y_train, epochs=100, batch_size=64)
+
+    linearity_plot()
+
+
+    # X_train_compressed = autoencoder.encode_data(X_train)
+
+    # train(regression_model_large, X_train, Y_train, epochs=40, batch_size=64)
+    # train(regression_model_small, X_train_compressed, Y_train, epochs=40, batch_size=64)
+
     # tuner = keras_tuner.RandomSearch(tuner_model, objective='val_loss', max_trials=100)
     # tuner.search(np.squeeze(X_train), Y_train, epochs=35, batch_size=128, validation_data=(np.squeeze(X_test), Y_test))
 
-    # plot_parameter_performance(['../untitled_project_2/', 'untitled_project/'], title='Number of Parameters vs. Training Performance [val MAE] [3/9/24]')
+    # plot_parameter_performance(['untitled_project/', '../untitled_project_2/', '../untitled_project_4/'], title='Number of Parameters vs. Training Performance [val MAE] [3/9/24]')
 
     '''
     tuner = tfdf.tuner.RandomSearch(num_trials=5, use_predefined_hps=True)
@@ -392,9 +451,39 @@ def regression():
 
     '''
 
+    '''
+
     model = CustomMLPModel(700, [512, 256, 64, 1])
-    train(model, X_train, Y_train, epochs=100, batch_size=64)
-    linearity_plot(model, (X_test, Y_test), title=model.name + ' linearity test [new data]')
+    all_losses = []
+    final_losses = []
+    data_sizes = [5000, 10000]
+    for data_size in data_sizes:
+        sz = int(data_size * 0.8)
+        history = train(model, X_train[:sz], Y_train[:sz], epochs=10, batch_size=128)
+        losses = history.history['val_loss']
+        final_losses.append(losses[-1])
+        all_losses.append(losses)
+        linearity_plot(model, (X_test, Y_test), title=' ' + str(data_size) + ' ')
+        reset_weights(model)
+
+    for data_size, losses in zip(data_sizes, all_losses):
+        plt.plot(losses, label='data size ' + str(data_size))
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss (MAE)')
+    plt.legend()
+    plt.title(model.name + ' Training Convergence vs. Data Size')
+    plt.show()
+    
+    plt.plot(final_losses)
+    plt.xlabel('Data Size')
+    plt.ylabel('Loss (MAE)')
+    plt.title(model.name + ' Training Loss vs. Data Size')
+    plt.show()
+
+    '''
+
+    # train(model, X_train, Y_train, epochs=100, batch_size=64)
+    # linearity_plot(model, (X_test, Y_test), title=model.name + ' linearity test [new data]')
         
     
     '''
