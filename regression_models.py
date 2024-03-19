@@ -1,6 +1,5 @@
 import tensorflow as tf
-import tensorflow_decision_forests as tfdf
-import keras_tuner
+# import keras_tuner
 import numpy as np
 from vgg import *
 
@@ -451,19 +450,22 @@ class HybridModel(tf.keras.Model):
         return x
     
 
-class RelativeError(tf.keras.losses.MeanAbsolutePercentageError):
-    def __init__(self, e=1e-5):
+class RelativeError(tf.keras.losses.Loss):
+    def __init__(self, e=1e-2):
         super().__init__()
         self.e = e
     
-    def __call__(self, y, y_hat):
+    def call(self, y, y_hat):
+        y = tf.squeeze(y)
         epsilon = tf.ones_like(y) * self.e
-        return super.__call__(y + epsilon, y_hat + epsilon)
+        return tf.keras.losses.MeanAbsolutePercentageError()(y + epsilon, y_hat + epsilon)
     
 
 class Autoencoder(tf.keras.Model):
     def __init__(self, input_size=None, encoder_layer_sizes=[1], decoder_layer_sizes=[700], name='mlp_encoder_'):
         for size in encoder_layer_sizes:
+            name += str(size) + '-'
+        for size in decoder_layer_sizes:
             name += str(size) + '-'
         name = name[:-1]
         super().__init__(name=name)
@@ -480,7 +482,7 @@ class Autoencoder(tf.keras.Model):
             self.decoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
         self.decoder.add(tf.keras.layers.Dense(decoder_layer_sizes[-1], activation='linear'))
         
-        self.loss = tf.keras.losses.MeanAbsolutePercentageError()
+        self.loss = RelativeError() # tf.keras.losses.MeanSquaredError()
         self.optimizer = tf.keras.optimizers.Adam()
 
         if input_size:
@@ -498,12 +500,14 @@ class Autoencoder(tf.keras.Model):
         x = self.flatten_layer(x)
         x = self.encoder(x)
 
-        return np.expand_dims(x.numpy(), axis=-1)
+        return np.array(np.expand_dims(x.numpy(), axis=-1), dtype=np.float16)
 
 
 class VariationalAutoencoder(tf.keras.Model):
     def __init__(self, input_size=None, encoder_layer_sizes=[1], decoder_layer_sizes=[700], name='vae_'):
         for size in encoder_layer_sizes:
+            name += str(size) + '-'
+        for size in decoder_layer_sizes:
             name += str(size) + '-'
         name = name[:-1]
         super().__init__(name=name)
@@ -557,8 +561,9 @@ class VariationalAutoencoder(tf.keras.Model):
         z_mean, z_log_var = self.encode(x)
         z = self.reparameterize(z_mean, z_log_var)
         x_recon = self.decode(z)
-        recon_loss = tf.reduce_mean(tf.reduce_sum(tf.keras.losses.binary_crossentropy(x, x_recon), axis=(1, 2)))
-        kl_loss = -0.5 * tf.reduce_mean(tf.reduce_sum(1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var), axis=1))
+        recon_loss = tf.reduce_mean(tf.keras.losses.binary_crossentropy(x, x_recon), axis=0)
+        kl_loss = -0.5 * tf.reduce_mean(1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var), axis=0)
+        print(recon_loss, kl_loss)
         total_loss = recon_loss + kl_loss
         return total_loss
 

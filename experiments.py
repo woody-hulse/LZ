@@ -1,5 +1,92 @@
 from main import *
 sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
+sns.color_palette('hls', 8)
+
+
+
+'''
+Generates a linearity plot based on model and data
+    model           : Tensorflow model
+    data            : (X, Y) tuple
+    delta_mu        : Delta mu bin sizes
+    num_delta_mu    : Number of delta mu bins
+    num_samples     : Number of samples per delta mu bin
+
+    return          : None
+'''
+def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1000, title=''):
+    def plot(x, y, err_down, err_up, color='blue', marker='o', title=None):
+        plt.plot(x, x, color='black', label='y = x Line')
+        plt.errorbar(x, y, yerr=(err_down, err_up), label='\u0394\u03bc Prediction', color=color, marker=marker, linestyle='None')
+
+        plt.xlabel('Actual \u0394\u03bc [ns]')
+        plt.ylabel('Median Predicted \u0394\u03bc [ns]')
+        plt.title(title)
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig('figs/' + title)
+        plt.clf()
+    
+    
+    if not data:
+        dMS = DS(DMS_NAME)
+        data_indices = np.array([i for i in range(len(dMS.ULvalues))])
+        np.random.shuffle(data_indices)
+        X = dMS.DSdata[data_indices]
+        X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
+        Y = dMS.ULvalues[data_indices]
+        Y = Y[:, 1]
+    else:
+        X, Y = data
+        X = np.squeeze(X)
+
+    counts = np.zeros(num_delta_mu)
+    X_delta_mu = np.empty((num_delta_mu, num_samples, 700))
+
+    if data:
+      X_delta_mu = np.empty((num_delta_mu, num_samples, data[0].shape[1]))
+
+    if '1090' in model.name.split('_'):
+        X_delta_mu = np.empty((num_delta_mu, num_samples, 701))
+        X = add_1090(np.expand_dims(X, axis=-1))
+
+    for i in tqdm(range(len(X))):
+        index = int(Y[i] // delta_mu)
+        if counts[index] >= num_samples: continue
+        else:
+            X_delta_mu[index, int(counts[index]), :] = X[i]
+            counts[index] += 1
+
+    predictions = np.zeros((num_delta_mu, num_samples))
+
+    prediction_means = np.zeros(num_delta_mu)
+    prediction_left_stds = np.zeros(num_delta_mu)
+    prediction_right_stds = np.zeros(num_delta_mu)
+
+    prediction_medians = np.zeros(num_delta_mu)
+    prediction_16 = np.zeros(num_delta_mu)
+    prediction_84 = np.zeros(num_delta_mu)
+
+    for i in tqdm(range(num_delta_mu)):
+        samples = np.expand_dims(X_delta_mu[i], axis=-1)
+        predictions[i][:] = np.squeeze(model(samples))
+        prediction_means[i] = np.mean(predictions[i])
+        prediction_left_stds[i] = np.std(predictions[i][predictions[i] < prediction_means[i]])
+        prediction_right_stds[i] = np.std(predictions[i][predictions[i] >= prediction_means[i]])
+        
+        prediction_medians[i] = np.median(predictions[i])
+        hist, bin_edges = np.histogram(predictions[i], bins=100, density=True)
+        cumulative_distribution = np.cumsum(hist * np.diff(bin_edges))
+        total_area = cumulative_distribution[-1]
+
+        prediction_16[i] = prediction_medians[i] - bin_edges[np.where(cumulative_distribution >= 0.16 * total_area)[0][0]]
+        prediction_84[i] = bin_edges[np.where(cumulative_distribution >= 0.84 * total_area)[0][0]] - prediction_medians[i]
+        
+    plot(np.arange(0, delta_mu * num_delta_mu, delta_mu), 
+         prediction_medians, prediction_16, prediction_84, 
+         title=model.name + ' model linearity plot' + title)
+
 
 '''
 Performs time jitter test on a list of models
@@ -17,7 +104,7 @@ def jitter_test(models, X, Y, test=None, epochs=100, plot_jitter=False, jitter=[
 
     debug_print(['running jitter test'])
 
-    sns.set_theme(style="whitegrid")
+    sns.set_theme(style='whitegrid')
 
     X_jitter = []
     X_jitter_test = []
@@ -171,6 +258,31 @@ def compare_history(models, metric, title=None):
     plt.show()
 
 '''
+Evaluate the efficacy of distribution shifting
+'''
+def shift_distribution_test(X_train, Y_train, X_test, Y_test):
+    X_train_jitter = jitter_pulses(X_train, 300)
+    X_test_jitter = jitter_pulses(X_test, 300)
+    three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    load_model_weights(three_layer_mlp)
+
+    train(three_layer_mlp, X_train_jitter, Y_train, epochs=100, batch_size=64)
+    linearity_plot(three_layer_mlp, (X_test_jitter, Y_test), num_samples=500, num_delta_mu=30)
+
+    three_layer_mlp_2 = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
+    load_model_weights(three_layer_mlp)
+    # load_model_weights(three_layer_mlp_2)
+
+    X_train_shift, Y_train_shift = shift_distribution(X_train, Y_train)
+    print(X_train_shift.shape)
+
+    train(three_layer_mlp_2, X_train_shift, Y_train_shift, epochs=100)
+
+    linearity_plot(three_layer_mlp, (X_test, Y_test))
+    linearity_plot(three_layer_mlp_2, (X_test, Y_test))
+
+
+'''
 Compare MLP parameter sizes against time jitter performance
 '''
 def mlp_jitter_test(X_train, Y_train, X_test, Y_test, epochs=50):
@@ -300,6 +412,8 @@ Plot parameter/peformance tradeoff from keras tuner
 def plot_parameter_performance(paths, lim=200, title='Number of Parameters vs. Training Performance'):
     parameters = []
     losses = []
+    colors = []
+    layer_sizes = []
     for path in paths:
         for dir in os.listdir(path):
             num_parameters = 0
@@ -310,18 +424,55 @@ def plot_parameter_performance(paths, lim=200, title='Number of Parameters vs. T
                 loss = trial['score']
                 try:
                     if loss > lim: continue
-                    for value in trial['hyperparameters']['values'].values():
+                    layers = trial['hyperparameters']['values'].values()
+                    layer_sizes.append(list(layers))
+                    for value in layers:
                         num_parameters += num_previous * value + value
                         num_previous = value
                     num_parameters += num_previous + 1
                     parameters.append(num_parameters)
                     losses.append(loss)
+                    colors.append(sum([1 if layer > 1 else 0 for layer in layers]))
                 except: continue
+    fig, ax = plt.subplots()
+    sc = plt.scatter(parameters, losses, c=colors, lw=2)# , label=str(i + 1) + ' layers')
+
+    annot = ax.annotate("", xy=(0,0), xytext=(10,10),textcoords='offset points',
+                        bbox=dict(boxstyle='round', fc='gray'),
+                        arrowprops=dict(arrowstyle='-'))
+    annot.set_visible(False)
+
+    def update_annotation(ind):
+        pos = sc.get_offsets()[ind['ind'][0]]
+        annot.xy = pos
+        text = ''
+        for i in ind['ind']:
+            text += 'Layers: ' + '->'.join(map(str, layer_sizes[i])) + '\n'
+        annot.set_text(text)
+        annot.get_bbox_patch().set_alpha(0.6)
+        
+
+    def hover(event):
+        vis = annot.get_visible()
+        if event.inaxes == ax:
+            cont, ind = sc.contains(event)
+            if cont:
+                update_annotation(ind)
+                annot.set_visible(True)
+                fig.canvas.draw_idle()
+            else:
+                if vis:
+                    annot.set_visible(False)
+                    fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect("motion_notify_event", hover)
     
-    plt.scatter(parameters, losses, lw=2)
     plt.xscale('log')
     plt.title(title)
+    plt.legend()
     plt.show()
+
+    return fig
 
 
 '''
@@ -378,3 +529,161 @@ def saliency_map_jitter(model, X_train, Y_train, X_test, Y_test, X_dist):
         )
 
     convert_files_to_gif('gif/', 'saliency_map.gif')
+
+'''
+Evaluate performance of model w.r.t. amount of training data
+'''
+def performance_vs_data(model, data_sizes, X_train, Y_train, X_test, Y_test):
+    all_losses = []
+    final_losses = []
+    for data_size in data_sizes:
+        sz = int(data_size * 0.8)
+        history = train(model, X_train[:sz], Y_train[:sz], epochs=200, batch_size=256)
+        losses = history.history['val_loss']
+        final_losses.append(losses[-1])
+        all_losses.append(losses)
+        linearity_plot(model, (X_test, Y_test), title=' ' + str(data_size) + ' ')
+        reset_weights(model)
+
+    for data_size, losses in zip(data_sizes, all_losses):
+        plt.plot(losses, label='data size ' + str(data_size))
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss (MAE)')
+    plt.ylim(100, 150)
+    plt.legend()
+    plt.title(model.name + ' Training Convergence vs. Data Size')
+    plt.show()
+    
+    plt.plot(final_losses)
+    plt.xlabel('Data Size')
+    plt.ylabel('Loss (MAE)')
+    plt.title(model.name + ' Training Loss vs. Data Size')
+    plt.show()
+
+
+'''
+Compare accuracy/data representations for different autoencoder sizes
+'''
+def compare_latent_dim_compression(latent_sizes, X_train, Y_train, X_test, Y_test):
+    for latent_size in latent_sizes:
+        autoencoder = Autoencoder(input_size=700, encoder_layer_sizes=[512, latent_size])
+
+        train(autoencoder, X_train, X_train, epochs=100, batch_size=256)
+
+        for x in X_test[:2]:
+            plt.plot(x, label='Original Pulse')
+            plt.plot(autoencoder(np.array([x]))[0], label='Reconstructed Pulse')
+            plt.title('Pulse reconstruction: ' + autoencoder.name)
+            plt.legend()
+            plt.show()
+
+        encoded_X_train = autoencoder.encode(X_train)
+        encoded_X_test = autoencoder.encode(X_test)
+
+        debug_print(['Size before compression:', sys.getsizeof(X_train), 'bytes\n',
+                    'Size after compression:', sys.getsizeof(X_train) // 700 * latent_size, f'bytes, ({700 // latent_size}x reduction)'])
+        regression_model_small = CustomMLPModel(input_size=latent_size, layer_sizes=[256, 128, 32, 1])
+
+        train(regression_model_small, encoded_X_train, Y_train, epochs=100, batch_size=256)
+
+        linearity_plot(regression_model_small, (encoded_X_test, Y_test))
+
+'''
+Compare relative deviation or other data-specific methods by compression performance
+'''
+def compare_data_compression(autoencoder, latent_size, X_train, Y_train):
+    base_autoencoder = copy.deepcopy(autoencoder)
+    test_autoencoder = copy.deepcopy(autoencoder)
+
+    X_dev, X_params, epsilon = get_relative_deviation(X_train)
+
+    train(test_autoencoder, X_dev, X_dev, epochs=100, batch_size=128)
+    train(base_autoencoder, X_train, X_train, epochs=100, batch_size=128)
+    
+    dev_encoded_X_train = test_autoencoder.encode(X_train)
+    encoded_X_train = base_autoencoder.encode(X_train)
+
+    base_model = CustomMLPModel(input_size=latent_size, layer_sizes=[256, 128, 32, 1])
+    test_model = CustomMLPModel(input_size=latent_size, layer_sizes=[256, 128, 32, 1])
+
+    train(base_model, dev_encoded_X_train, Y_train, epochs=100, batch_size=256)
+
+    train(test_model, encoded_X_train, Y_train, epochs=100, batch_size=256)
+
+    # plot
+    for dev, params, x in zip(X_dev[:2], X_params[:2], X_train[:2]):
+        dev = test_autoencoder(np.array([dev]))[0]
+        dev = np.reshape(dev, (-1, 1))
+        a = np.linspace(0, dev.shape[0], dev.shape[0])
+        fit = np.expand_dims(gaussian(a, *params), axis=-1) + np.ones_like(dev) * epsilon
+        x_r = dev * fit
+        plt.title('Gaussian deviation autoencoder')
+        plt.plot(x, label='Original Pulse')
+        plt.plot(x_r, label='Reconstructed Pulse')
+        plt.xlabel('Samples')
+        plt.show()
+
+    
+    for x in X_train[:2]:
+        x_r = base_autoencoder(np.array([x]))[0]
+        plt.title('Vanilla autoencoder')
+        plt.plot(x, label='Original Pulse')
+        plt.plot(x_r, label='Reconstructed Pulse')
+        plt.xlabel('Samples')
+        plt.show()
+
+    linearity_plot(base_model, (dev_encoded_X_train, Y_train))
+
+    linearity_plot(test_model, (encoded_X_train, Y_train))
+
+
+'''
+Area fraction vs. performance
+'''
+def area_fraction_test(model, X, Y, areafrac):
+    num_areafracs = 10
+
+    areafrac_indices = np.zeros(num_areafracs, dtype=np.int32)
+    areafrac_data = np.empty((num_areafracs, int(X.shape[0] / (num_areafracs * 1.5))), dtype=np.int32)
+    print(areafrac_data.shape, X.shape, areafrac.shape)
+    for i, frac in enumerate(areafrac):
+        af = 0.5 - np.abs(0.5 - frac) - 1e-4
+        index = int(np.floor(af * 2 * num_areafracs))
+        if areafrac_indices[index] >= areafrac_data.shape[1]: continue
+        areafrac_data[index][areafrac_indices[index]] = i
+        areafrac_indices[index] += 1
+
+    model = CustomMLPModel(input_size=700, layer_sizes=[256, 128, 32, 1])
+
+    areafrac_models = [CustomMLPModel(input_size=700, layer_sizes=[256, 128, 32, 1]) for _ in range(num_areafracs)]
+
+    for areafrac_model, indices in zip(areafrac_models, areafrac_data):
+        X_areafrac = X[indices]
+        Y_areafrac = Y[indices]
+        train(areafrac_model, X_areafrac, Y_areafrac, epochs=200, batch_size=128)
+
+    train(model, X, Y, epochs=50, batch_size=128)
+
+    for areafrac_model, indices in zip(areafrac_models, areafrac_data):
+        X_areafrac = X[indices][:100]
+        Y_areafrac = Y[indices][:100]
+        a = areafrac[indices][:100]
+        af = 0.5 - np.abs(0.5 - a)
+        Y_pred_areafrac = areafrac_model(X_areafrac)
+        error = np.abs(Y_areafrac - Y_pred_areafrac[:, 0])
+        plt.scatter(af, error, s=5)
+        plt.plot(np.unique(af), np.poly1d(np.polyfit(af, error, 1))(np.unique(af)))
+    
+    X_test = X[:2000]
+    Y_test = Y[:2000]
+    areafrac_test = areafrac[:2000]
+    af_test = 0.5 - np.abs(0.5 - areafrac_test)
+    Y_pred = model(X_test)[:, 0]
+    error = np.abs(Y_test - Y_pred)
+    plt.plot(np.unique(af_test), np.poly1d(np.polyfit(af_test, error, 1))(np.unique(af_test)), label='All areafrac model')
+
+    plt.legend()
+    plt.title('Separately trained areafrac model performance')
+    plt.ylabel('MAE')
+    plt.xlabel('Area fraction')
+    plt.show()

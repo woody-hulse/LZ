@@ -5,6 +5,7 @@ sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Ti
 from scipy.stats import norm
 import tensorflow as tf
 from scipy.optimize import curve_fit
+import pickle
 
 import imageio
 from tqdm import tqdm
@@ -165,12 +166,14 @@ Concatenates data from multiple filepaths
 def concat_data(paths):
     X_list = []
     Y_list = []
+    areafrac_list = []
     for path in paths:
         ds = DS(path)
         X_list.append(ds.DSdata)
         Y_list.append(np.array(ds.ULvalues[:, 1]))
+        areafrac_list.append(np.array(ds.ULvalues[:, 3]))
     
-    return np.concatenate(X_list), np.concatenate(Y_list)
+    return np.concatenate(X_list), np.concatenate(Y_list), np.concatenate(areafrac_list)
 
 
 '''
@@ -191,7 +194,7 @@ Converts pulses to relative deviation
 def get_relative_deviation(X):
     X_dev = np.empty(X.shape)
     X_params = np.empty((X.shape[0], 3))
-    epsilon = np.ones_like(X[0]) * 1e-5
+    epsilon = np.ones_like(X[0]) * 1e-2
     for i in tqdm(range(X.shape[0])):
         x = np.linspace(0, X.shape[1], X.shape[1])
         y = X[i, :, 0]
@@ -200,7 +203,19 @@ def get_relative_deviation(X):
         X_fit = np.expand_dims(gaussian(x, *params), axis=-1)
         X_dev[i] = X[i] / (X_fit + epsilon)
 
-    return X_dev, X_params
+        plt.plot(X[i])
+        plt.title('Pulse')
+        plt.show()
+
+        plt.plot(X_fit)
+        plt.title('Fitted gaussian')
+        plt.show()
+
+        plt.plot(X_dev[i])
+        plt.title('Relative deviation from fitted gaussian')
+        plt.show()
+
+    return X_dev, X_params, epsilon
 
 
 
@@ -251,6 +266,41 @@ def normalize(data):
             print('ALERT', data)
             return None
         else: return data / np.linalg.norm(data)
+
+'''
+Save and load TF model weights
+    model           : Tensorflow model
+    name            : Save name
+
+    return          : None
+'''
+def save_model_weights(model, name=None):
+    if not name: name = model.name
+    debug_print(['saving', name, 'weights to', MODEL_SAVE_PATH])
+    model.save_weights(MODEL_SAVE_PATH + name)
+
+
+def load_model_weights(model, name=None):
+    if not name: name = model.name
+    debug_print(['loading', name, 'weights from', MODEL_SAVE_PATH + name + '.data'])
+    model.load_weights(MODEL_SAVE_PATH + name)
+
+
+'''
+Reset learned model weights to initialization
+    model           : Tensorflow model
+
+    return          : Reset model
+'''
+def reset_weights(model):
+    debug_print(['resetting', model.name, 'weights'])
+    for layer in model.layers:
+        if isinstance(layer, (tf.keras.layers.Convolution1D, tf.keras.layers.Dense)):
+            layer.set_weights([
+                tf.keras.initializers.glorot_normal()(layer.weights[0].shape),
+                tf.zeros(layer.weights[1].shape)  # Bias
+            ])
+    return model
 
 '''
 TF data generator
@@ -360,3 +410,13 @@ def convert_files_to_gif(directory, name):
         file_path = os.path.join(directory, filename)
         if os.path.isfile(file_path) and filename != name:
             os.remove(file_path)
+
+
+def save_interactive_plot(fig, path='interactive_plot.fig.pickle'):
+    pickle.dump(fig, open(path, 'wb'))
+
+def load_interactive_plot(path='interactive_plot.fig.pickle'):
+    with open(path, 'rb') as file: 
+        fig = pickle.load(file)
+        plt._backend_mod.new_figure_manager_given_figure(1, fig)
+        plt.show()
