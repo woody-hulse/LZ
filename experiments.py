@@ -618,6 +618,9 @@ def compare_latent_dim_compression_at(latent_sizes, X_train, Y_train, AT_train, 
             plt.legend()
             plt.show()
 
+        continue
+
+
         encoded_X_train = autoencoder.encode(X_train)
         encoded_X_test = autoencoder.encode(X_test)
 
