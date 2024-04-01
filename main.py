@@ -22,6 +22,7 @@ from channel_models import *
 from vgg import *
 from experiments import *
 from autoencoder import *
+from pulse import *
 
 # import importlib
 # importlib.reload(regression_models)
@@ -33,6 +34,8 @@ DMS_NAMES = [
     # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz',
     # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch02.npz'
 ]
+DMS_NAMES = ['../dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz']
+DMS_AT_NAME = '../dSSdMS/dMS_2400320_gaussgass_700samplearea7000_areafrac0o5_deltamuinterval50ns_1.0e+05events_random_centered_withEAT.npz'
 
 # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
 
@@ -154,8 +157,16 @@ def regression():
         else: return data / np.linalg.norm(data)
 
     debug_print(['preprocessing data'])
+
+    X = np.array([None for _ in range(num_samples)])
+    Y = np.array([None for _ in range(num_samples)])
+    areafrac = np.array([None for _ in range(num_samples)])
+    AT = np.array([None for _ in range(num_samples)])
     
-    X, Y, areafrac = concat_data(DMS_NAMES)
+    # X, Y, AT = generate_ms_pulse_dataset(num_samples, arrival_times=True, save=True)
+    # X, Y, AT = generate_ms_pulse_dataset_multiproc(num_samples, arrival_times=True, save=True)
+    X, Y, AT = load_ms_pulse_dataset(DMS_AT_NAME)
+    # X, Y, _ = concat_data(DMS_NAMES)
     # X, Y = shift_distribution(X, Y)
     # plot_distribution(Y)
     data_indices = np.array([i for i in range(len(X))])
@@ -163,7 +174,31 @@ def regression():
     X = X[data_indices][:num_samples]
     X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
     Y = Y[data_indices][:num_samples]
+    AT = AT[data_indices][:num_samples]
     areafrac = areafrac[data_indices][:num_samples]
+
+    '''
+    X2, Y2 = generate_ms_pulse_dataset(num_samples)
+
+    di = np.array([i for i in range(len(X2))])
+    np.random.shuffle(di)
+    X2 = X2[di]
+    X2 = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X2], axis=0)
+
+    for i1 in range(25):
+        x1, y1 = X[i1], Y[i1]
+
+        y2 = -1
+        while y2 != y1:
+            i2 = np.random.randint(0, num_samples)
+            x2, y2 = X2[i2], Y2[i2]
+            print(y1, y2)
+        
+        print(y1)
+        plt.plot(x1)
+        plt.plot(x2)
+        plt.show()
+    '''
 
     # X = jitter_pulses(X, t=20)
     
@@ -198,7 +233,23 @@ def regression():
     Experiments
     '''
 
-    compare_latent_dim_compression([1, 2, 4, 8, 16, 32, 64, 128, 256], X_train, Y_train, X_test, Y_test)
+    # model = CustomMLPModel(input_size=700, layer_sizes=[512, 256, 32, 1])
+    # train(model, X, Y, epochs=50, batch_size=128)
+
+    at_model = CustomMLPModel(input_size=700, layer_sizes=[512, 256, 256, ELECTRONS])
+    train(at_model, X, AT, epochs=100, batch_size=128)
+
+    test_samples = 10
+    for x, dmu, at in zip(X[:test_samples], Y[:test_samples], AT[:test_samples]):
+        at_hat = at_model(np.expand_dims(x, axis=0))[0]
+        plt.title(f'True vs. predicted electron arrival times for Δμ={dmu} pulse')
+        plt.plot(at, marker='+', label='True electron arrival times')
+        plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
+        plt.ylabel('Arrival time (samples, 10ns)')
+        plt.xlabel('Electron number')
+        plt.show()
+
+    # compare_latent_dim_compression([1, 2, 4, 8, 16, 32, 64, 128, 256], X_train, Y_train, X_test, Y_test)
 
 
     # tuner = keras_tuner.RandomSearch(tuner_model, objective='val_loss', max_trials=100)

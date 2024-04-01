@@ -70,7 +70,7 @@ class CustomMLPModel(tf.keras.Model):
             metrics.append('AUC')
         else: 
             self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
-            self.loss = tf.keras.losses.MeanAbsoluteError()
+            self.loss = tf.keras.losses.MeanSquaredError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
