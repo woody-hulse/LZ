@@ -72,16 +72,16 @@ def generate_ms_pulse_dataset(num_pulses, bins=20, max_delta_mu=1000, arrival_ti
         dmu = max_delta_mu // bins * i
         for j in range(bin_sizes):
             pulse, eats = generate_ms_pulse(delta_mu=dmu)
-            pulses.append(np.expand_dims(pulse, axis=0))
+            pulses.append(pulse)
             eats.sort()
-            electron_arrival_times.append(np.expand_dims(eats, axis=0))
+            electron_arrival_times.append(eats)
             delta_mu.append(dmu)
     end_time = time.time()
     debug_print(['Single processor dataset generation time:', end_time - start_time, 's'])
 
-    pulses = np.concatenate(pulses, axis=0)
+    pulses = np.array(pulses)
     delta_mu = np.array(delta_mu)
-    electron_arrival_times = np.concatenate(electron_arrival_times, axis=0)
+    electron_arrival_times = np.array(electron_arrival_times)
 
     if save: save_ms_pulse_dataset(pulses, delta_mu, electron_arrival_times, arrival_times)
 
@@ -94,9 +94,9 @@ def worker_task(dmu, bin_sizes):
     electron_arrival_times = []
     for _ in range(bin_sizes):
         pulse, eats = generate_ms_pulse(delta_mu=dmu)
-        pulses.append(np.expand_dims(pulse, axis=0))
+        pulses.append(pulse)
         eats.sort()
-        electron_arrival_times.append(np.expand_dims(eats, axis=0))
+        electron_arrival_times.append(eats)
     return pulses, electron_arrival_times, [dmu] * bin_sizes
 
 
@@ -119,9 +119,9 @@ def generate_ms_pulse_dataset_multiproc(num_pulses, bins=20, max_delta_mu=1000, 
     end_time = time.time()
     debug_print(['Multiprocessor dataset generation time:', end_time - start_time, 's'])
 
-    pulses = np.concatenate(pulses, axis=0)
+    pulses = np.array(pulses)
     delta_mu = np.array(delta_mu)
-    electron_arrival_times = np.concatenate(electron_arrival_times, axis=0)
+    electron_arrival_times = np.array(electron_arrival_times)
 
     if save: save_ms_pulse_dataset(pulses, delta_mu, electron_arrival_times, arrival_times)
 
@@ -152,6 +152,21 @@ def load_ms_pulse_dataset(file):
         electron_arrival_times = f['electron_arrival_times']
     
     return pulses, delta_mu, electron_arrival_times
+
+
+def at_to_hist(at):
+    at_hist = []
+    debug_print(['generating arrival time histograms'])
+    for times in tqdm(at):
+        hist, bins = np.histogram(times, bins=np.arange(0, 700, 1))
+        at_hist.append(hist)
+    at_hist = np.array(at_hist)
+
+    return at_hist
+
+def plot_at_hists(hist, label):
+    plt.fill_between(range(len(hist)), hist, alpha=0.3)
+    plt.plot(hist, label=label)    
 
 
 

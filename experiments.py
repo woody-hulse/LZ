@@ -589,6 +589,47 @@ def compare_latent_dim_compression(latent_sizes, X_train, Y_train, X_test, Y_tes
         linearity_plot(regression_model_small, (encoded_X_test, Y_test))
 
 '''
+Compare accuracy/data representations for different autoencoder sizes with arrival times
+'''
+def compare_latent_dim_compression_at(latent_sizes, X_train, Y_train, AT_train, X_test, Y_test, AT_test):
+    for latent_size in latent_sizes:
+        at_weight = 1e-7
+        autoencoder = MultiHeaddedAutoencoder(
+            input_size=700, 
+            encoder_layer_sizes=[512, 256, latent_size], 
+            decoders=[[256, 512, 700], [128, 128, 148]],
+            loss_weights=[1 - at_weight, at_weight])
+
+        train(autoencoder, X_train, [X_train, AT_train], epochs=1, batch_size=256)
+
+        for x, dmu, at in zip(X_test[:2], Y_test[:2], AT_test[:2]):
+            x_hat, at_hat = autoencoder(np.array([x]))
+            plt.plot(x, label='Original Pulse')
+            plt.plot(x_hat[0], label='Reconstructed Pulse')
+            plt.title('Pulse reconstruction: ' + autoencoder.name)
+            plt.legend()
+            plt.show()
+
+            plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
+            plt.plot(at, marker='+', label='True electron arrival times')
+            plt.plot(at_hat[0], marker='o', label='Predicted electron arrival times')
+            plt.ylabel('Arrival time (samples, 10ns)')
+            plt.xlabel('Electron number')
+            plt.legend()
+            plt.show()
+
+        encoded_X_train = autoencoder.encode(X_train)
+        encoded_X_test = autoencoder.encode(X_test)
+
+        debug_print(['Size before compression:', sys.getsizeof(X_train), 'bytes\n',
+                    'Size after compression:', sys.getsizeof(X_train) // 700 * latent_size, f'bytes, ({700 // latent_size}x reduction)'])
+        regression_model_small = CustomMLPModel(input_size=latent_size, layer_sizes=[256, 128, 32, 1])
+
+        train(regression_model_small, encoded_X_train, Y_train, epochs=100, batch_size=256)
+
+        linearity_plot(regression_model_small, (encoded_X_test, Y_test))
+
+'''
 Compare relative deviation or other data-specific methods by compression performance
 '''
 def compare_data_compression(autoencoder, latent_size, X_train, Y_train):

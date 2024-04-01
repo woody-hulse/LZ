@@ -158,10 +158,10 @@ def regression():
 
     debug_print(['preprocessing data'])
 
-    X = np.array([None for _ in range(num_samples)])
-    Y = np.array([None for _ in range(num_samples)])
-    areafrac = np.array([None for _ in range(num_samples)])
-    AT = np.array([None for _ in range(num_samples)])
+    X = np.array([None for _ in range(int(1e6))])
+    Y = np.array([None for _ in range(int(1e6))])
+    areafrac = np.array([None for _ in range(int(1e6))])
+    AT = np.array([None for _ in range(int(1e6))])
     
     # X, Y, AT = generate_ms_pulse_dataset(num_samples, arrival_times=True, save=True)
     # X, Y, AT = generate_ms_pulse_dataset_multiproc(num_samples, arrival_times=True, save=True)
@@ -176,6 +176,8 @@ def regression():
     Y = Y[data_indices][:num_samples]
     AT = AT[data_indices][:num_samples]
     areafrac = areafrac[data_indices][:num_samples]
+
+    # AT_hist = at_to_hist(AT)
 
     '''
     X2, Y2 = generate_ms_pulse_dataset(num_samples)
@@ -236,18 +238,60 @@ def regression():
     # model = CustomMLPModel(input_size=700, layer_sizes=[512, 256, 32, 1])
     # train(model, X, Y, epochs=50, batch_size=128)
 
+    ae = Autoencoder(
+        input_size=700, 
+        encoder_layer_sizes=[512, 256, 32],
+        decoder_layer_sizes=[256, 700]
+    )
+
+    vqvae = VQVariationalAutoencoder(
+        input_size=700, 
+        num_embeddings=1024, 
+        encoder_layer_sizes=[512, 256, 128],
+        decoder_layer_sizes=[256, 700]
+    )
+
+    # train(ae, X_train, X_train, epochs=20, batch_size=128)
+    # train(vqvae, X_train, X_train, epochs=20, batch_size=256)
+
+    at_weight = 1e-7
+    mhae = MultiHeaddedAutoencoder(
+        input_size=700, 
+        encoder_layer_sizes=[512, 256, 16], 
+        decoders=[[256, 512, 700], [128, 128, 148]],
+        loss_weights=[1 - at_weight, at_weight])
+    
+    # train(mhae, X, [X, AT], epochs=20, batch_size=128, summary=True)
+
+    compare_latent_dim_compression_at([1, 2, 4, 8, 16, 32, 64, 128, 256], X, Y, AT, X[:100], Y[:100], AT[:100])
+
+    '''
+
     at_model = CustomMLPModel(input_size=700, layer_sizes=[512, 256, 256, ELECTRONS])
-    train(at_model, X, AT, epochs=100, batch_size=128)
+    train(at_model, X, AT, epochs=200, batch_size=128)
 
     test_samples = 10
     for x, dmu, at in zip(X[:test_samples], Y[:test_samples], AT[:test_samples]):
         at_hat = at_model(np.expand_dims(x, axis=0))[0]
-        plt.title(f'True vs. predicted electron arrival times for Δμ={dmu} pulse')
+        plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
         plt.plot(at, marker='+', label='True electron arrival times')
         plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
         plt.ylabel('Arrival time (samples, 10ns)')
         plt.xlabel('Electron number')
+        plt.legend()
         plt.show()
+        
+        at_hist, _ = np.histogram(at, bins=np.arange(0, 700, 1))
+        at_hat_hist, _ = np.histogram(at_hat, bins=np.arange(0, 700, 1))
+        plot_at_hists(at_hist, label='True arrival times')
+        plot_at_hists(at_hat_hist, label='Predicted arrival times')
+        plt.title('True vs predicted histogram of electron arrival times')
+        plt.xlabel('Arrival time (samples, 10ns)')
+        plt.ylabel('Number of electrons')
+        plt.legend()
+        plt.show()
+
+    '''
 
     # compare_latent_dim_compression([1, 2, 4, 8, 16, 32, 64, 128, 256], X_train, Y_train, X_test, Y_test)
 
