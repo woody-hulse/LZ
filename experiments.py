@@ -600,7 +600,7 @@ def compare_latent_dim_compression_at(latent_sizes, X_train, Y_train, AT_train, 
             decoders=[[256, 512, 700], [128, 128, 148]],
             loss_weights=[1 - at_weight, at_weight])
 
-        train(autoencoder, X_train, [X_train, AT_train], epochs=1, batch_size=256)
+        train(autoencoder, X_train, [X_train, AT_train], epochs=50, batch_size=256)
 
         for x, dmu, at in zip(X_test[:2], Y_test[:2], AT_test[:2]):
             x_hat, at_hat = autoencoder(np.array([x]))
