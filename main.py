@@ -35,7 +35,8 @@ DMS_NAMES = [
     # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch02.npz'
 ]
 DMS_NAMES = ['../dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz']
-DMS_AT_NAME = '../dSSdMS/dMS_2400320_gaussgass_700samplearea7000_areafrac0o5_deltamuinterval50ns_1.0e+05events_random_centered_withEAT.npz'
+DMS_AT_NAME = '../dSSdMS/dSS_2400402_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_withEAT.npz'
+DMS_AT_CHANNEL_NAME = '../dSSdMS/dSS_2400402_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered_channel_withEAT.npz'
 
 # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
 
@@ -165,14 +166,34 @@ def regression():
     
     # X, Y, AT = generate_ms_pulse_dataset(num_samples, arrival_times=True, save=True)
     # X, Y, AT = generate_ms_pulse_dataset_multiproc(num_samples, arrival_times=True, save=True)
-    X, Y, AT = load_ms_pulse_dataset(DMS_AT_NAME)
+    X, XC, Y, AT = load_ms_pulse_dataset(DMS_AT_CHANNEL_NAME)
+
+    image_frames = []
+    imgs = np.transpose(XC, axes=[0, 3, 1, 2])
+    for t in imgs[0]:
+        plt.imshow(t)
+        plt.title('Hit pattern')
+        
+        plt.gcf().canvas.draw()
+        width, height = plt.gcf().get_size_inches() * plt.gcf().dpi
+        data = np.frombuffer(plt.gcf().canvas.tostring_rgb(), dtype=np.uint8)
+        image_array = data.reshape(int(height), int(width), 3)
+
+        image_frame = Image.fromarray(image_array)
+        image_frames.append(image_frame)
+
+    image_frames[0].save('hit_pattern' + '.gif', 
+                        save_all = True, 
+                        duration = 20,
+                        loop = 0,
+                        append_images = image_frames[1:])
+
     # X, Y, _ = concat_data(DMS_NAMES)
     # X, Y = shift_distribution(X, Y)
     # plot_distribution(Y)
-    data_indices = np.array([i for i in range(len(X))])
+    data_indices = np.array([i for i in range(min(X.shape[0], num_samples))])
     np.random.shuffle(data_indices)
     X = X[data_indices][:num_samples]
-    X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
     Y = Y[data_indices][:num_samples]
     AT = AT[data_indices][:num_samples]
     areafrac = areafrac[data_indices][:num_samples]
@@ -203,12 +224,13 @@ def regression():
     '''
 
     # X = jitter_pulses(X, t=20)
-    
+    '''
     X_avg = normalize(np.average(X, axis=0))
     x = np.linspace(0, X.shape[1], X.shape[1])
     params, cov = curve_fit(gaussian, x, X_avg)
     X_dist = gaussian(x, *params)
     X_dist = np.expand_dims(X_dist, axis=-1)
+    '''
     '''
     X_dev = np.concatenate([np.expand_dims(X[i] / X_dist, axis=0) for i in range(X.shape[0])], axis=0)
     X_diff = np.concatenate([np.expand_dims(X[i] - X_dist, axis=0) for i in range(X.shape[0])], axis=0)
@@ -222,7 +244,7 @@ def regression():
     X_diff_train, X_diff_test, Y_train, Y_test = train_test_split(X_diff, Y, test_size=0.2, random_state=42)
     '''
 
-    X = np.expand_dims(X, axis=-1)
+    # X = np.expand_dims(X, axis=-1)
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
     # X_fft_train, X_fft_test, Y_train, Y_test = train_test_split(X_fft, Y, test_size=0.2, random_state=42)
     # X_1090_train = add_1090(X_train)
@@ -235,8 +257,24 @@ def regression():
     Experiments
     '''
 
-    # model = CustomMLPModel(input_size=700, layer_sizes=[512, 256, 32, 1])
-    # train(model, X, Y, epochs=50, batch_size=128)
+    at_model = CustomMLPModel(700, layer_sizes=[2048, 1024, 256, NUM_ELECTRONS])
+    # at_model = ConvChannelModel(700, layer_sizes=[1024, 512, 256, NUM_ELECTRONS])
+    train(at_model, XC, AT, epochs=100, batch_size=128)
+
+    test_samples = 10
+    for x, dmu, at in zip(XC[:test_samples], Y[:test_samples], AT[:test_samples]):
+        at_hat = at_model(np.expand_dims(x, axis=0))[0]
+        plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
+        plt.plot(at, marker='+', label='True electron arrival times')
+        plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
+        plt.ylabel('Arrival time (samples, 10ns)')
+        plt.xlabel('Electron number')
+        plt.legend()
+        plt.show()
+
+        continue
+
+    '''
 
     ae = Autoencoder(
         input_size=700, 
@@ -246,14 +284,24 @@ def regression():
 
     vqvae = VQVariationalAutoencoder(
         input_size=700, 
-        num_embeddings=1024, 
+        num_embeddings=65536, 
         encoder_layer_sizes=[512, 256, 128],
         decoder_layer_sizes=[256, 700]
     )
 
     # train(ae, X_train, X_train, epochs=20, batch_size=128)
-    # train(vqvae, X_train, X_train, epochs=20, batch_size=256)
+    train(vqvae, X_train, X_train, epochs=20, batch_size=256)
 
+    for x in X[:4]:
+        x_hat = vqvae(np.array([x]))[0]
+        plt.plot(x)
+        plt.plot(x_hat)
+        plt.show()
+
+    '''
+
+    '''
+    
     at_weight = 1e-7
     mhae = MultiHeaddedAutoencoder(
         input_size=700, 
@@ -261,14 +309,14 @@ def regression():
         decoders=[[256, 512, 700], [128, 128, 148]],
         loss_weights=[1 - at_weight, at_weight])
     
+    
+    
     # train(mhae, X, [X, AT], epochs=20, batch_size=128, summary=True)
 
     compare_latent_dim_compression_at([1, 2, 4, 8, 16, 32, 64, 128, 256], X, Y, AT, X[:100], Y[:100], AT[:100])
 
-    '''
-
-    at_model = CustomMLPModel(input_size=700, layer_sizes=[512, 256, 256, ELECTRONS])
-    train(at_model, X, AT, epochs=200, batch_size=128)
+    at_model = CustomMLPModel(input_size=np.prod(X.shape[1:]), layer_sizes=[512, 256, 256, NUM_ELECTRONS])
+    train(at_model, X, AT, epochs=10, batch_size=4, summary=True)
 
     test_samples = 10
     for x, dmu, at in zip(X[:test_samples], Y[:test_samples], AT[:test_samples]):
@@ -280,6 +328,8 @@ def regression():
         plt.xlabel('Electron number')
         plt.legend()
         plt.show()
+
+        continue
         
         at_hist, _ = np.histogram(at, bins=np.arange(0, 700, 1))
         at_hat_hist, _ = np.histogram(at_hat, bins=np.arange(0, 700, 1))

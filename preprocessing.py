@@ -7,6 +7,7 @@ import tensorflow as tf
 from scipy.optimize import curve_fit
 import pickle
 
+from PIL import Image
 import imageio
 from tqdm import tqdm
 import os

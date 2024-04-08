@@ -6,17 +6,17 @@ import time
 from preprocessing import *
 
 # Parameters (in ns)
-DIFFWIDTH   = 300
-G2          = 47.35
-EGASWIDTH   = 450
-PHDWIDTH    = 20
-SAMPLERATE  = 10
-ELECTRONS   = 148
+DIFFWIDTH       = 300
+G2              = 47.35
+EGASWIDTH       = 450
+PHDWIDTH        = 20
+SAMPLERATE      = 10
+NUM_ELECTRONS   = 148
 
 def gaussian(x, C, mu, sigma):
     return C*np.exp(-(x-mu)**2/(2*sigma**2))
 
-def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=ELECTRONS // 2):
+def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=NUM_ELECTRONS // 2):
     summed_pulse = np.zeros(size)
     pulse = np.zeros((num_rows, num_cols, size))
 
@@ -27,8 +27,34 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=E
     electron_arrival_times = np.random.normal(mu, DIFFWIDTH / SAMPLERATE, size=num_electrons)
     num_photons = np.random.poisson(G2, size=num_electrons)
     for e in range(num_electrons):
-        # r = int(np.random.normal(num_cols / 2, num_cols / 8))
-        # c = int(np.random.normal(num_rows / 2, num_rows / 8))
+        r = int(np.random.normal(num_cols / 2, num_cols / 8))
+        c = int(np.random.normal(num_rows / 2, num_rows / 8))
+        r = min(num_cols - 1, max(0, r))
+        c = min(num_rows - 1, max(0, c))
+        photon_arrival_times = np.random.normal(electron_arrival_times[e], EGASWIDTH / SAMPLERATE, num_photons[e])
+        for p in range(num_photons[e]):
+            # Not considering multiple photoelectron emission
+            # num_photoelectrons = np.abs(np.random.normal(1, 0.4))
+            photon_indices = int(photon_arrival_times[p]) + photon_interval
+            valid_indices = (photon_indices >= 0) & (photon_indices < size)
+            photon_emmission = gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width)
+            summed_pulse[photon_indices[valid_indices]] += photon_emmission
+            pulse[r][c][photon_indices[valid_indices]] += photon_emmission
+
+    # electron_arrival_times.sort()
+
+    return summed_pulse, pulse, electron_arrival_times
+
+def generate_pulse(mu=350, size=700, num_electrons=NUM_ELECTRONS // 2):
+    summed_pulse = np.zeros(size)
+
+    photon_interval_width = PHDWIDTH // SAMPLERATE * 3
+    photon_interval = np.array([i for i in range(-photon_interval_width, photon_interval_width + 1)])
+    phd_sample_width = PHDWIDTH / SAMPLERATE
+
+    electron_arrival_times = np.random.normal(mu, DIFFWIDTH / SAMPLERATE, size=num_electrons)
+    num_photons = np.random.poisson(G2, size=num_electrons)
+    for e in range(num_electrons):
         photon_arrival_times = np.random.normal(electron_arrival_times[e], EGASWIDTH / SAMPLERATE, num_photons[e])
         for p in range(num_photons[e]):
             # Not considering multiple photoelectron emission
@@ -38,14 +64,13 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=E
             summed_pulse[photon_indices[valid_indices]] += gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width)
 
     # electron_arrival_times.sort()
-
-    return summed_pulse, electron_arrival_times
+    return summed_pulse, None, electron_arrival_times
 
         
 def generate_ms_pulse(delta_mu=100):
     diff = (delta_mu / SAMPLERATE) // 2
-    summed_pulse_1, electron_arrival_times_1 = generate_channel_pulse(num_rows=50, num_cols=50, mu=350 - diff, size=700)
-    summed_pulse_2, electron_arrival_times_2 = generate_channel_pulse(num_rows=50, num_cols=50, mu=350 + diff, size=700)
+    summed_pulse_1, electron_arrival_times_1 = generate_pulse(mu=350 - diff, size=700)
+    summed_pulse_2, electron_arrival_times_2 = generate_pulse(mu=350 + diff, size=700)
 
     ms_pulse = summed_pulse_1 + summed_pulse_2
     electron_arrival_times = np.concatenate([electron_arrival_times_1, electron_arrival_times_2], axis=0)
@@ -91,13 +116,15 @@ def generate_ms_pulse_dataset(num_pulses, bins=20, max_delta_mu=1000, arrival_ti
 
 def worker_task(dmu, bin_sizes):
     pulses = []
+    summed_pulses = []
     electron_arrival_times = []
     for _ in range(bin_sizes):
-        pulse, eats = generate_ms_pulse(delta_mu=dmu)
+        summed_pulse, pulse, eats = generate_channel_pulse(num_rows=10, num_cols=10, num_electrons=NUM_ELECTRONS)
         pulses.append(pulse)
+        summed_pulses.append(summed_pulse)
         eats.sort()
         electron_arrival_times.append(eats)
-    return pulses, electron_arrival_times, [dmu] * bin_sizes
+    return summed_pulses, pulses, electron_arrival_times, [dmu] * bin_sizes
 
 
 def generate_ms_pulse_dataset_multiproc(num_pulses, bins=20, max_delta_mu=1000, arrival_times=True, save=False):
@@ -109,35 +136,39 @@ def generate_ms_pulse_dataset_multiproc(num_pulses, bins=20, max_delta_mu=1000, 
     with Pool() as pool:
         results = pool.starmap(worker_task, tasks)
 
+    summed_pulses = []
     pulses = []
     electron_arrival_times = []
     delta_mu = []
     for result in results:
-        pulses += result[0]
-        electron_arrival_times += result[1]
-        delta_mu += result[2]
+        summed_pulses += result[0]
+        pulses += result[1]
+        electron_arrival_times += result[2]
+        delta_mu += result[3]
     end_time = time.time()
     debug_print(['Multiprocessor dataset generation time:', end_time - start_time, 's'])
 
+    summed_pulses = np.array(summed_pulses)
     pulses = np.array(pulses)
     delta_mu = np.array(delta_mu)
     electron_arrival_times = np.array(electron_arrival_times)
 
-    if save: save_ms_pulse_dataset(pulses, delta_mu, electron_arrival_times, arrival_times)
+    if save: save_ms_pulse_dataset(summed_pulses, pulses, delta_mu, electron_arrival_times, arrival_times)
 
-    if arrival_times: return pulses, delta_mu, electron_arrival_times
-    else: return pulses, delta_mu
+    if arrival_times: return summed_pulses, pulses, delta_mu, electron_arrival_times
+    else: return summed_pulses, pulses, delta_mu
 
 
-def save_ms_pulse_dataset(pulses, delta_mu, electron_arrival_times, arrival_times):
+def save_ms_pulse_dataset(summed_pulses, pulses, delta_mu, electron_arrival_times, arrival_times):
     debug_print(['saving dataset'])
     num_pulses = pulses.shape[0]
     e = '{:.1e}'.format(num_pulses)
     weat = '_withEAT' if arrival_times else ''
-    fname = f'../dSSdMS/dMS_2400320_gaussgass_700samplearea7000_areafrac0o5_deltamuinterval50ns_{e}events_random_centered{weat}.npz'
+    fname = f'../dSSdMS/dSS_2400402_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered_channel{weat}.npz'
     np.savez_compressed(
         file=fname,
-        events=pulses,
+        events=summed_pulses,
+        channel_events=pulses,
         delta_mu=delta_mu,
         electron_arrival_times=electron_arrival_times
     )
@@ -147,11 +178,12 @@ def save_ms_pulse_dataset(pulses, delta_mu, electron_arrival_times, arrival_time
 def load_ms_pulse_dataset(file):
     debug_print(['loading dataset from', file])
     with np.load(file) as f:
-        pulses = f['events']
+        summed_pulses = f['events']
+        pulses = f['channel_events']
         delta_mu = f['delta_mu']
         electron_arrival_times = f['electron_arrival_times']
     
-    return pulses, delta_mu, electron_arrival_times
+    return summed_pulses, pulses, delta_mu, electron_arrival_times
 
 
 def at_to_hist(at):
@@ -171,10 +203,7 @@ def plot_at_hists(hist, label):
 
 
 def main():
-    for i in range(20):
-        generate_ms_pulse(delta_mu=i*5)
-    
-    # plot_pulses(pulses)
+    generate_ms_pulse_dataset_multiproc(50000, bins=10, max_delta_mu=0, arrival_times=True, save=True)
 
 if __name__ == '__main__':
     main()
