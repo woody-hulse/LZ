@@ -7,6 +7,7 @@ import copy
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import normalize
@@ -14,7 +15,6 @@ from sklearn.metrics import roc_auc_score
 from sklearn.metrics import roc_curve
 from scipy.stats import norm
 import matplotlib.cm as cm
-
 from preprocessing import *
 # from models import *
 from regression_models import *
@@ -23,6 +23,8 @@ from vgg import *
 from experiments import *
 from autoencoder import *
 from pulse import *
+
+DATE = ' [4-19-24]'
 
 # import importlib
 # importlib.reload(regression_models)
@@ -35,8 +37,10 @@ DMS_NAMES = [
     # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch02.npz'
 ]
 DMS_NAMES = ['../dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz']
-DMS_AT_NAME = '../dSSdMS/dSS_2400402_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_withEAT.npz'
-DMS_AT_CHANNEL_NAME = '../dSSdMS/dSS_2400402_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered_channel_withEAT.npz'
+DSS_SIMPLE_NAME = '/Users/woodyhulse/Documents/lz/dSSdMS/dSS_2400419_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_withEAT_1e.npz'
+DMS_AT_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT_10e.npz'
+DMS_AT_CHANNEL_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
+DMS_CHANNEL_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
 
 # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
 
@@ -69,7 +73,7 @@ def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2
 
     c = []
     if callbacks:
-        tf.keras.backend.set_value(model.optimizer.learning_rate, learning_rate)
+        # tf.keras.backend.set_value(model.optimizer.learning_rate, learning_rate)
         reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
         c.append(tf.keras.callbacks.EarlyStopping(patience=20))
         c.append(reduce_lr)
@@ -90,7 +94,7 @@ def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2
 Perform classification-based tasks and experiments
 '''
 def classification():
-    num_samples = 300000
+    num_samples = 30000
 
     dSS = DS(DSS_NAME)
     dMS = DS(DMS_NAME)
@@ -149,7 +153,7 @@ Perform regression-based tasks and experiments
 '''
 def regression():
     np.random.seed(42)
-    num_samples = 100000
+    num_samples = 50000
 
     def normalize(data):
         if np.linalg.norm(data) == 0:
@@ -166,10 +170,13 @@ def regression():
     
     # X, Y, AT = generate_ms_pulse_dataset(num_samples, arrival_times=True, save=True)
     # X, Y, AT = generate_ms_pulse_dataset_multiproc(num_samples, arrival_times=True, save=True)
-    X, XC, Y, AT = load_ms_pulse_dataset(DMS_AT_CHANNEL_NAME)
+    X, XC, Y, AT = load_pulse_dataset(DSS_SIMPLE_NAME)
+    # XS = np.sum(XC, axis=(1, 2))
+    # XB = np.max(XC, axis=(1, 2))
 
+    '''
     image_frames = []
-    imgs = np.transpose(XC, axes=[0, 3, 1, 2])
+    imgs = np.transpose(XC[:10], axes=[0, 3, 1, 2])
     for t in imgs[0]:
         plt.imshow(t)
         plt.title('Hit pattern')
@@ -187,6 +194,8 @@ def regression():
                         duration = 20,
                         loop = 0,
                         append_images = image_frames[1:])
+    '''
+    
 
     # X, Y, _ = concat_data(DMS_NAMES)
     # X, Y = shift_distribution(X, Y)
@@ -194,6 +203,7 @@ def regression():
     data_indices = np.array([i for i in range(min(X.shape[0], num_samples))])
     np.random.shuffle(data_indices)
     X = X[data_indices][:num_samples]
+    # XC = XC[data_indices][:num_samples]
     Y = Y[data_indices][:num_samples]
     AT = AT[data_indices][:num_samples]
     areafrac = areafrac[data_indices][:num_samples]
@@ -245,20 +255,180 @@ def regression():
     '''
 
     # X = np.expand_dims(X, axis=-1)
-    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+    # X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
     # X_fft_train, X_fft_test, Y_train, Y_test = train_test_split(X_fft, Y, test_size=0.2, random_state=42)
     # X_1090_train = add_1090(X_train)
     # X_1090_test = add_1090(X_test)
 
-    debug_print(['     X_train:', X_train.shape])
-    debug_print(['     Y_train:', Y_train.shape])
+    # debug_print(['     X_train:', X_train.shape])
+    # debug_print(['     Y_train:', Y_train.shape])
 
     '''
     Experiments
     '''
 
-    at_model = CustomMLPModel(700, layer_sizes=[2048, 1024, 256, NUM_ELECTRONS])
+
+    '''
+    model = CustomMLPModel(700, layer_sizes=[700, 700, 700])
+    train(model, XS, X, epochs=15, batch_size=512, callbacks=True)
+
+    for x, xb in zip(X[:10], XS[:10]):
+        x_hat = model(np.expand_dims(xb, axis=0))[0]
+        plt.plot(x_hat, label='Reconstructed pulse')
+        plt.plot(x, label='True pulse')
+        plt.legend()
+        plt.show()
+        plt.plot(xb)
+        plt.title('Binary pulse' + DATE)
+        plt.show()
+    '''
+
+
+    '''
+    ATH = np.array([[0]] for at in AT[:10])
+    ATH = np.zeros(X.shape)
+    for i, at in tqdm(enumerate(AT)):
+        hist, bins = np.histogram(at, bins=np.arange(701))
+        ATH[i] = hist
+
+    at_model = CustomMLPBinnedModel(700, layer_sizes=[700, 700, 700])
+    train(at_model, X, ATH, epochs=50, batch_size=128, callbacks=True)
+
+    for i in range(10):
+        at = ATH[i]
+        at_hat = at_model(np.expand_dims(X[i], axis=0))[0]
+        plot_at_hists(at_hat, label='Predicted arrival times')
+        plot_at_hists(at, label='True arrival times')
+        plt.title('True vs predicted histogram of electron arrival times')
+        plt.xlabel('Arrival time (samples, 10ns)')
+        plt.ylabel('Number of electrons')
+        plt.legend()
+        plt.show()
+    '''
+
+    '''
+    # channel_model =  MLPChannelModel(input_size=700, head_sizes=[256, 128, 16], layer_sizes=[256, 256, 1], heads=5)
+    channel_model = ConvChannelModel(input_size=list(XC.shape[1:]))
+    train(channel_model, XC, Y, epochs=100, batch_size=128, callbacks=True, summary=True)
+
+    # linearity_plot(channel_model, (XC, Y))
+
+    model = CustomMLPModel(700, layer_sizes=[512, 256, 128, 1])
+    train(model, X, Y, epochs=100, batch_size=128)
+    '''
+
+    '''
+    model = CustomMLPModel(700, layer_sizes=[512, 256, 256, NUM_ELECTRONS])
+    train(model, X, AT, epochs=10, batch_size=128)
+
+    test_samples = 10
+    for x, dmu, at in zip(X[:test_samples], Y[:test_samples], AT[:test_samples]):
+        at_hat = model(np.expand_dims(x, axis=0))[0]
+        plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
+        plt.plot(x, label='Event')
+        plt.axvline(x=at_hat, color='#CC4F1B',  linestyle='--', label='Arrival time prediction')
+        # plt.plot(at, marker='+', label='True electron arrival times')
+        # plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
+        # plt.ylabel('Arrival time (samples, 10ns)')
+        plt.xlabel('Sample')
+        # plt.ylim((0, 700))
+        plt.legend()
+        plt.show()
+
+        continue 
+    '''
+
+    electron_counts = [256]
+    errors = []
+    for n in electron_counts:
+        X, XC, Y, AT = generate_pulse_dataset_multiproc(100000, bins=20, max_delta_mu=0, arrival_times=True, save=False, task=pulse_task, num_electrons=n)
+
+        model = CustomMLPModel(700, layer_sizes=[512, 256, 256, n])
+        train(model, X, AT, epochs=128, batch_size=256, summary=True)
+
+        x = X[:500]
+        at = AT[:500]
+        at_ = model(X[:500])
+        error = tf.keras.losses.MeanSquaredError()(at, at_).numpy()
+        error_scatterplot(at, at_)
+        errors.append(error)
+
+        test_samples=4
+        for i, (x, dmu, at) in enumerate(zip(X[:test_samples], Y[:test_samples], AT[:test_samples])):
+            at_hat = model(np.expand_dims(x, axis=0))[0]
+            plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
+            plt.plot(at, marker='+', label='True electron arrival times')
+            plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
+            plt.ylabel('Arrival time (samples, 10ns)')
+            plt.xlabel('Sample')
+            # plt.ylim((0, 700))
+            plt.legend()
+            plt.savefig(f'eat_{n}_{i}')
+            plt.clf()
+    
+    fig, ax = plt.subplots()
+    ax.plot(electron_counts, errors, marker='+')
+    ax.set_ylabel('MSE')
+    ax.set_xlabel('Event electron count')
+    ax.set_xscale('log', base=2)
+    ax.set_title('Number of electrons in event vs arrival time prediction accuracy')
+    plt.show()
+
+    '''
+    at_model = CustomMLPModel(700, layer_sizes=[512, 256, 256, NUM_ELECTRONS])
     # at_model = ConvChannelModel(700, layer_sizes=[1024, 512, 256, NUM_ELECTRONS])
+    # at_model = MLPChannelModel(input_size=700, head_sizes=[256, 128, 16], layer_sizes=[256, 256, NUM_ELECTRONS], heads=5)
+    train(at_model, X, AT, epochs=300, batch_size=256, callbacks=False, summary=True)
+    # AT_hat = at_model(X[:10000])
+    # residual_plot(AT[:10000], AT_hat)
+    # error_scatterplot(AT[:10000], AT_hat)
+
+    
+    for i in range(10):
+        at = AT[i]
+        at_hat = at_model(np.expand_dims(X[i], axis=0))[0]
+
+        plt.title('True vs predicted electron arrival times for Δμ=0 pulse')
+        plt.plot(at, label='True electron arrival times')
+        plt.plot(at_hat, label='Predicted electron arrival times')
+        plt.ylabel('Arrival time (samples, 10ns)')
+        plt.xlabel('Electron number')
+        plt.legend()
+        plt.show()
+    '''
+
+    '''
+        at_hat_hist, _ = np.histogram(at_hat, bins=np.arange(0, 700, 1))
+        at_hist, _ = np.histogram(at, bins=np.arange(0, 700, 1))
+        plot_at_hists(at_hat_hist, label='Predicted arrival times')
+        plot_at_hists(at_hist, label='True arrival times')
+        plt.title('True vs predicted histogram of electron arrival times')
+        plt.xlabel('Arrival time (samples, 10ns)')
+        plt.ylabel('Number of electrons')
+        plt.legend()
+        plt.show()
+        '''
+
+    '''
+
+    test_samples = 10
+    for x, dmu, at in zip(X[:test_samples], Y[:test_samples], AT[:test_samples]):
+        at_hat = at_model(np.expand_dims(x, axis=0))[0]
+        plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
+        plt.plot(at, marker='+', label='True electron arrival times')
+        plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
+        plt.ylabel('Arrival time (samples, 10ns)')
+        plt.xlabel('Electron number')
+        plt.legend()
+        plt.show()
+
+        continue
+
+    at_model = CustomMLPModel(700, layer_sizes=[2048, 1024, 256, NUM_ELECTRONS])
+
+
+
+    at_model = ConvChannelModel(700, layer_sizes=[1024, 512, 256, NUM_ELECTRONS])
     train(at_model, XC, AT, epochs=100, batch_size=128)
 
     test_samples = 10
@@ -273,6 +443,9 @@ def regression():
         plt.show()
 
         continue
+    '''
+        
+    
 
     '''
 

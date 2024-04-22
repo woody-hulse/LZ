@@ -52,18 +52,18 @@ class ConvModel(tf.keras.Model):
     
 
 class ConvChannelModel(tf.keras.Model):
-    def __init__(self, input_size=None, kernel_size=3, num_filters=128, num_conv=4, layer_sizes=[1], classification=False, name='mlp_model_'):
+    def __init__(self, input_size=None, kernel_size=3, num_filters=128, num_conv=4, layer_sizes=[1], classification=False, name='conv_channel_model_'):
         for size in layer_sizes:
             name += str(size) + '-'
         name = name[:-1]
         super().__init__(name=name)
         
-        self.conv_layers = [tf.keras.layers.Conv2d(num_filters, kernel_size, activation='leaky_relu', padding='valid') for _ in range(num_conv)]
+        self.conv_layers = [tf.keras.layers.Conv2D(num_filters, kernel_size, activation='leaky_relu', padding='valid') for _ in range(num_conv)]
         self.flatten_layer = tf.keras.layers.Flatten()
         self.dense_layers = [tf.keras.layers.Dense(size, activation='leaky_relu') for size in layer_sizes[:-1]]
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = tf.keras.optimizers.Adam(1e-5)
         if classification: 
             self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
             self.loss = tf.keras.losses.BinaryCrossentropy()
@@ -74,11 +74,55 @@ class ConvChannelModel(tf.keras.Model):
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
-            self.build((None, input_size, 1))
+            self.build([None] + input_size)
 
     def call(self, x):
         for layer in self.conv_layers:
             x = layer(x)
+        x = self.flatten_layer(x)
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        return x
+    
+
+class MLPChannelModel(tf.keras.Model):
+    def __init__(self, input_size=None, head_sizes=[1], layer_sizes=[1], heads=3, classification=False, name='mlp_model_'):
+        for size in layer_sizes:
+            name += str(size) + '-'
+        name = name[:-1]
+        super().__init__(name=name)
+        
+        self.heads = heads
+        self.reshape_layer = tf.keras.layers.Reshape((-1, input_size))
+        self.td_heads = [tf.keras.Sequential([tf.keras.layers.Dense(size, activation='leaky_relu') for size in head_sizes]) for _ in range(heads)]
+        self.flatten_layer = tf.keras.layers.Flatten()
+        self.dense_layers = [
+            tf.keras.layers.Dense(512, activation='leaky_relu'),
+            tf.keras.layers.Dense(256, activation='leaky_relu')
+        ]
+
+        metrics = []
+        self.optimizer = tf.keras.optimizers.Adam()
+        if classification: 
+            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
+            self.loss = tf.keras.losses.BinaryCrossentropy()
+            metrics.append('AUC')
+        else: 
+            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
+            # self.loss = tf.keras.losses.MeanSquaredError()
+            self.loss = tf.keras.losses.MeanSquaredError()
+
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
+            self.build((None, 10, 10, input_size))
+
+    def call(self, x):
+        x = self.reshape_layer(x)
+        head_out = []
+        for head in self.td_heads:
+            head_out.append(head(x))
+        x = tf.concat(head_out, axis=1)
         x = self.flatten_layer(x)
         for layer in self.dense_layers:
             x = layer(x)
@@ -94,16 +138,17 @@ class CustomMLPModel(tf.keras.Model):
         super().__init__(name=name)
         
         self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(size, activation='relu') for size in layer_sizes[:-1]]
+        self.dense_layers = [tf.keras.layers.Dense(size, activation='leaky_relu') for size in layer_sizes[:-1]]
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
         if classification: 
             self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
             self.loss = tf.keras.losses.BinaryCrossentropy()
             metrics.append('AUC')
         else: 
             self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
+            # self.loss = tf.keras.losses.MeanSquaredError()
             self.loss = tf.keras.losses.MeanSquaredError()
 
         if input_size:
@@ -116,7 +161,66 @@ class CustomMLPModel(tf.keras.Model):
             x = layer(x)
         
         return x
+
+class RelativeError(tf.keras.losses.Loss):
+    def __init__(self, e=1e-2):
+        super().__init__()
+        self.e = e
     
+    def call(self, y, y_hat):
+        y = tf.squeeze(y)
+        epsilon = tf.ones_like(y) * self.e
+        return tf.keras.losses.MeanAbsolutePercentageError()(y + epsilon, y_hat + epsilon)
+
+class BinnedError(tf.keras.losses.Loss):
+    def __init__(self, lam=0.9):
+        super().__init__()
+        self.lam = lam
+    
+    def call(self, y, y_hat):
+        mse = tf.reduce_mean(tf.square(y - y_hat), axis=1)
+        ve = 0 # tf.square(tf.reduce_sum(tf.abs(y), axis=1) - tf.reduce_sum(tf.abs(y_hat), axis=1))
+        return tf.reduce_mean(self.lam * mse + (1 - self.lam) * ve)
+    
+class BinnedRelativeError(tf.keras.losses.Loss):
+    def __init__(self, e=1e-1, lam=0.9999):
+        super().__init__()
+        self.e = e
+        self.lam = lam
+    
+    def call(self, y, y_hat):
+        re = tf.reduce_mean(tf.abs((y_hat + self.e) / (y + self.e)))
+        ve = tf.reduce_mean(tf.square(tf.reduce_sum(tf.abs(y), axis=1) - tf.reduce_sum(tf.abs(y_hat), axis=1)))
+        return self.lam * re + (1 - self.lam) * ve
+
+
+class CustomMLPBinnedModel(tf.keras.Model):
+    def __init__(self, input_size=None, layer_sizes=[1], name='mlp_binned_model_'):
+        for size in layer_sizes:
+            name += str(size) + '-'
+        name = name[:-1]
+        super().__init__(name=name)
+        
+        self.flatten_layer = tf.keras.layers.Flatten()
+        self.dense_layers = [tf.keras.layers.Dense(size, activation='leaky_relu') for size in layer_sizes]
+
+        metrics = []
+        self.optimizer = tf.keras.optimizers.Adam()
+        self.dense_layers.append(tf.keras.layers.Dense(input_size, activation='linear'))
+        self.loss = BinnedError()
+
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
+            self.build((None, input_size, 1))
+
+    def call(self, x):
+        x = self.flatten_layer(x)
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        return x
+
+
 
 def tuner_model(hp):
     model = tf.keras.Sequential()
@@ -482,17 +586,6 @@ class HybridModel(tf.keras.Model):
         x = self.output_layer(x)
 
         return x
-    
-
-class RelativeError(tf.keras.losses.Loss):
-    def __init__(self, e=1e-2):
-        super().__init__()
-        self.e = e
-    
-    def call(self, y, y_hat):
-        y = tf.squeeze(y)
-        epsilon = tf.ones_like(y) * self.e
-        return tf.keras.losses.MeanAbsolutePercentageError()(y + epsilon, y_hat + epsilon)
     
 
 class Autoencoder(tf.keras.Model):

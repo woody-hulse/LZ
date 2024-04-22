@@ -14,7 +14,6 @@ import os
 import datetime
 import json
 
-
 '''
 Data structure for hosting DS data and associated UL values
     self.DSdata     : Pulse height in phd (photons detected)

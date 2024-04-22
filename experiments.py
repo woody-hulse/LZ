@@ -2,6 +2,67 @@ from main import *
 sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
 sns.color_palette('hls', 8)
 
+'''
+Plot scatterplot of errors
+'''
+def error_scatterplot(y_true, y_pred, num_scatter=500):
+    error = np.square(y_true - y_pred)
+    sign = (y_true - y_pred) / np.abs(y_true - y_pred)
+    signed_error = error * sign
+    mean_signed_error = np.mean(signed_error, axis=0)
+
+    x = np.arange(y_true.shape[1])
+    for errors in signed_error[:num_scatter]:
+        plt.scatter(x, errors, alpha=0.2, color='#FF9848', s=5)
+
+    plt.scatter(x, mean_signed_error, color='#FF9848', s=10)
+
+    plt.plot(x, mean_signed_error, color='#CC4F1B', label='Mean signed error')
+    plt.title('Signed mean squared error of arrival times' + DATE)
+    plt.ylim((-1000, 1000))
+    plt.ylabel('Signed squared error')
+    plt.xlabel('Electron index')
+    plt.legend()
+    # plt.show()
+    plt.savefig(f'figs/smse_p_noprotondiff_{y_true.shape[1]}')
+    plt.clf()
+
+
+'''
+Plot average residuals
+'''
+def residual_plot(y_true, y_pred):
+    diff = y_true - y_pred
+    residual = np.square(diff)
+    avg_residual = np.mean(residual, axis=0)
+    med_diff = np.median(diff, axis=0)
+    avg_diff = np.mean(diff)
+    std_residual = np.std(residual, axis=0)
+
+    print('mean:', np.mean(y_true - y_pred))
+
+    diff_16 = np.zeros(y_true.shape[1])
+    diff_84 = np.zeros(y_true.shape[1])
+    for i in range(y_true.shape[1]):
+        hist, bin_edges = np.histogram(diff[:, i], bins=100, density=True)
+        cumulative_distribution = np.cumsum(hist * np.diff(bin_edges))
+        total_area = cumulative_distribution[-1]
+        diff_16[i] = bin_edges[np.where(cumulative_distribution >= 0.16 * total_area)[0][0]]
+        diff_84[i] = bin_edges[np.where(cumulative_distribution >= 0.84 * total_area)[0][0]]
+
+    plt.title('Electron arrival time prediction' + DATE)
+    x = np.arange(y_true.shape[1])
+    y = np.zeros_like(x)
+    plt.plot(med_diff, color='#CC4F1B', label='Difference between real and predicted value')
+    # plt.fill_between(y, med_diff, color='blue', label='Difference between real and predicted value')
+    # plt.errorbar(x, med_diff, yerr=(diff_16, diff_84), label='Error of predicted value', color='black', linestyle='None')
+    plt.plot(y, linestyle='dashed', color='black', label='True')
+    plt.fill_between(x, diff_16, diff_84, alpha=0.5, edgecolor='#CC4F1B', facecolor='#FF9848', label='16/84 error in prediction')
+    plt.ylim((-10, 10))
+    plt.legend()
+    plt.show()
+
+
 
 
 '''
@@ -42,20 +103,16 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
         X = np.squeeze(X)
 
     counts = np.zeros(num_delta_mu)
-    X_delta_mu = np.empty((num_delta_mu, num_samples, 700))
+    X_delta_mu = np.empty((num_delta_mu, num_samples))
 
     if data:
-      X_delta_mu = np.empty((num_delta_mu, num_samples, data[0].shape[1]))
-
-    if '1090' in model.name.split('_'):
-        X_delta_mu = np.empty((num_delta_mu, num_samples, 701))
-        X = add_1090(np.expand_dims(X, axis=-1))
+        X_delta_mu = np.empty([num_delta_mu, num_samples] + list(X.shape[1:]))
 
     for i in tqdm(range(len(X))):
         index = int(Y[i] // delta_mu)
         if counts[index] >= num_samples: continue
         else:
-            X_delta_mu[index, int(counts[index]), :] = X[i]
+            X_delta_mu[index, int(counts[index])] = X[i]
             counts[index] += 1
 
     predictions = np.zeros((num_delta_mu, num_samples))
@@ -731,3 +788,4 @@ def area_fraction_test(model, X, Y, areafrac):
     plt.ylabel('MAE')
     plt.xlabel('Area fraction')
     plt.show()
+
