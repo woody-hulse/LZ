@@ -420,3 +420,10 @@ def load_interactive_plot(path='interactive_plot.fig.pickle'):
         fig = pickle.load(file)
         plt._backend_mod.new_figure_manager_given_figure(1, fig)
         plt.show()
+
+def get_windowed_data(X, Y, window_size=100):
+    X_windowed, Y_windowed = [], []
+    for i in range(len(X) - window_size):
+        X_windowed.append(X[i:i+window_size])
+        Y_windowed.append(Y[i+window_size//2])
+    return np.array(X_windowed), np.array(Y_windowed)

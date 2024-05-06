@@ -789,3 +789,29 @@ def area_fraction_test(model, X, Y, areafrac):
     plt.xlabel('Area fraction')
     plt.show()
 
+
+def categorical_mse(y, y_hat, categories=(0, 1, 2, 3, 4)):
+    mse_values = []
+
+    for cat in categories:
+        indices = (y == cat)
+        mse = np.mean((y_hat[indices] - y[indices]) ** 2)
+        mse_values.append(mse)
+
+    return mse_values
+
+def plot_mse_histogram(y, y_hat, categories=(0, 1, 2, 3, 4), title='Baseline MSE for each photon count [4-25-24]', save_path=''):
+    mse_values = categorical_mse(y, y_hat, categories)
+    bins = np.array(categories + (5,))
+    
+    plt.stairs(mse_values, bins - 0.5)
+    plt.xticks(np.arange(len(categories)))
+    plt.xlabel('Photon count')
+    plt.ylabel('MSE')
+    plt.ylim((0, 16))
+    plt.title(title)
+    if save_path == '':
+        plt.show()
+    else:
+        plt.savefig(save_path)
+        plt.clf()

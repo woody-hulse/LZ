@@ -42,6 +42,8 @@ DMS_AT_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0
 DMS_AT_CHANNEL_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
 DMS_CHANNEL_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
 
+DSS_CHANNEL_PHOTON = '../dSSdMS/dSS_2400425_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz'
+
 # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
 
 MODEL_SAVE_PATH = 'saved_models/'
@@ -153,7 +155,7 @@ Perform regression-based tasks and experiments
 '''
 def regression():
     np.random.seed(42)
-    num_samples = 50000
+    num_events = 50000
 
     def normalize(data):
         if np.linalg.norm(data) == 0:
@@ -165,12 +167,15 @@ def regression():
 
     X = np.array([None for _ in range(int(1e6))])
     Y = np.array([None for _ in range(int(1e6))])
+    XC = np.array([None for _ in range(int(1e6))])
+    PXC = np.array([None for _ in range(int(1e6))])
     areafrac = np.array([None for _ in range(int(1e6))])
     AT = np.array([None for _ in range(int(1e6))])
     
     # X, Y, AT = generate_ms_pulse_dataset(num_samples, arrival_times=True, save=True)
     # X, Y, AT = generate_ms_pulse_dataset_multiproc(num_samples, arrival_times=True, save=True)
-    X, XC, Y, AT = load_pulse_dataset(DSS_SIMPLE_NAME)
+    X, XC, PXC, Y, AT = load_pulse_dataset(DSS_CHANNEL_PHOTON)
+
     # XS = np.sum(XC, axis=(1, 2))
     # XB = np.max(XC, axis=(1, 2))
 
@@ -200,13 +205,149 @@ def regression():
     # X, Y, _ = concat_data(DMS_NAMES)
     # X, Y = shift_distribution(X, Y)
     # plot_distribution(Y)
-    data_indices = np.array([i for i in range(min(X.shape[0], num_samples))])
-    np.random.shuffle(data_indices)
-    X = X[data_indices][:num_samples]
-    # XC = XC[data_indices][:num_samples]
-    Y = Y[data_indices][:num_samples]
-    AT = AT[data_indices][:num_samples]
-    areafrac = areafrac[data_indices][:num_samples]
+    event_indices = np.array([i for i in range(min(X.shape[0], num_events))])
+    np.random.shuffle(event_indices)
+    X = X[event_indices][:num_events]
+    XC = XC[event_indices][:num_events]
+    PXC = PXC[event_indices][:num_events]
+    Y = Y[event_indices][:num_events]
+    AT = AT[event_indices][:num_events]
+    areafrac = areafrac[event_indices][:num_events]
+
+    num_samples = 1000000
+    sample_indices = np.array([i for i in range(num_samples)])
+    np.random.shuffle(sample_indices)
+    X_FLAT = np.reshape(X, (-1, 1))
+    XC_FLAT = np.reshape(XC, (-1, 1))
+    PXC_FLAT = np.reshape(PXC, (-1, 1))
+    PX_FLAT = np.reshape(np.sum(PXC, axis=(1, 2)), (-1, 1))
+
+    '''
+    PXC_OHE = np.eye(5)[PXC_FLAT[:, 0]]
+    photon_classifier = BaselinePhotonClassifier(input_size=1, layer_sizes=[1, 32, 32, 5])
+    train(photon_classifier, XC_FLAT, PXC_OHE, epochs=10, batch_size=128)
+
+    '''
+
+    # y = PXC_FLAT
+    # y_hat = np.zeros_like(PXC_FLAT)
+
+    # plot_mse_histogram(y, y_hat, title='Baseline MSE for each photon count [4-25-24]')
+
+    '''
+
+    counts, bins = np.histogram(PXC_FLAT)
+    counts, bins = counts[:5], bins[:6]
+    plt.stairs(counts / len(PXC_FLAT), bins - 0.5)
+    for i in range(len(counts)):
+        plt.text(bins[i], counts[i] / len(PXC_FLAT) + 0.01, str(round(counts[i] / len(PXC_FLAT), 4)), ha='center')
+    
+    plt.xlabel('Photon count')
+    plt.ylabel('Proportion of dataset')
+    plt.title('Proportion of each photon count in simulated SS channel pulse')
+    plt.show()
+
+    '''
+
+
+
+
+    for window_size in [16]:
+        X_chunks, Y_chunks = get_windowed_data(XC_FLAT[:num_samples + window_size], PXC_FLAT[:num_samples + window_size], window_size)
+
+        photon_model = BaselinePhotonModel(input_size=window_size, layer_sizes=[32, 32, 1], max=4)
+        train(photon_model, X_chunks[sample_indices], Y_chunks[sample_indices], epochs=50, batch_size=512)
+        y_hat = photon_model(X_chunks[:100000])
+        y = Y_chunks[:100000]
+        plot_mse_histogram(y, y_hat, title=f'window={window_size} model MSE for each photon count [4-25-24]', save_path=f'{window_size}_gram_mse_smse')
+
+        num_tests = 5
+        for i in range(num_tests):
+            x, y = np.transpose(np.reshape(XC[i], (16*16, 700))), np.transpose(np.reshape(PXC[i], (16*16, 700)))
+            y_ = np.empty_like(y[window_size//2:-window_size//2], dtype=np.float32)
+            for c in range(16*16):
+                x_chunks, y_chunks = get_windowed_data(x[:, c], y[:, c], window_size)
+                y_[:, c] = photon_model(x_chunks)[:, 0]
+            y = y[window_size//2:-window_size//2]
+            
+            plt.figure(figsize=(8, 6))
+            plt.plot(np.sum(y, axis=(1)), label='True summed pulse')
+            plt.plot(np.sum(y_, axis=(1)), label='Predicted summed pulse', color='orange')
+            plt.plot(np.sum(np.round(y_, decimals=0), axis=1), label='Predicted summed pulse (rounded)', color='red', alpha=0.5) 
+
+            plt.xlabel('Sample')
+            plt.ylabel('Photon count')
+            plt.title(f'window={window_size} SS pulse summed photon count prediction')
+            plt.legend()
+            # plt.show()
+            plt.savefig(f'window_{window_size}_{i}_pulse_summed_smse')
+            plt.clf()
+
+
+            channel = 36
+            plt.figure(figsize=(8, 6))
+            plt.plot(y[:, channel], label=f'Channel {channel} pulse')
+            plt.plot(y_[:, channel], label=f'Predicted channel pulse')
+            plt.xlabel('Sample')
+            plt.ylabel('Photon count')
+            plt.title(f'window={window_size} single channel photon count prediction')
+            plt.legend()
+            plt.savefig(f'window_{window_size}_{i}_pulse_smse')
+            plt.clf()
+            # plt.show()
+
+    
+    '''
+    X, Y = np.transpose(np.reshape(XC, (-1, 16*16, 700, 1)), axes=(0, 2, 1, 3)), np.transpose(np.reshape(PXC, (-1, 16*16, 700, 1)), axes=(0, 2, 1, 3))
+    # X = np.transpose(np.reshape(XC, (-1, 16*16, 700)), (0, 2, 1))
+    # Y = np.transpose(np.reshape(PXC, (-1, 16*16, 700)), (0, 2, 1))
+    # X_, Y_ = np.reshape(XC, (-1, 16*16, 1)), np.reshape(PXC, (-1, 16*16, 1))
+    X_, Y_ = np.reshape(X, (-1, 16*16, 1)), np.reshape(Y, (-1, 16*16, 1))
+
+    # xs, ys = np.sum(X_, axis=(1, 2)), np.sum(Y_, axis=(1, 2))
+    # plt.plot(xs[sample_indices][:1000])
+    # plt.plot(ys[sample_indices][:1000])
+    # plt.show()
+
+    # return
+
+    photon_model = ChannelPhotonModel(input_size=1, layer_sizes=[32, 32, 1], max=np.max(Y))
+    train(photon_model, X_[sample_indices], Y_[sample_indices], epochs=40, batch_size=512)
+
+    num_tests = 5
+    for i in range(num_tests):
+        x, y = X[i], Y[i]
+        y_ = photon_model(x)
+        plt.plot(np.sum(y, axis=(1)))
+        plt.plot(np.sum(y_, axis=(1, 2)))
+        plt.show()
+    '''
+
+
+
+    '''
+    X, Y = XC_FLAT, PXC_FLAT
+
+    print(X.shape, Y.shape)
+
+    photon_model = BaselinePhotonModel(input_size=1, layer_sizes=[1, 32, 32, 1], max=np.max(Y))
+    train(photon_model, X[sample_indices], Y[sample_indices], epochs=100, batch_size=256)
+
+    num_samples = 5000
+    xc = X[:num_samples]
+    pxc = Y[:num_samples]
+    pxc_ = photon_model(xc)
+    # pxc_ = np.argmax(photon_classifier(xc).numpy(), axis=1)
+
+    plt.plot(pxc)
+    plt.plot(pxc_)
+    # max_photons = np.max(pxc)
+    # x = np.arange(0, max_photons, 1)
+    # plt.scatter(pxc, pxc_)
+    # plt.plot(x, x, color='red')
+    plt.show()
+    '''
+
 
     # AT_hist = at_to_hist(AT)
 
@@ -338,6 +479,8 @@ def regression():
         continue 
     '''
 
+    '''
+
     electron_counts = [256]
     errors = []
     for n in electron_counts:
@@ -373,6 +516,7 @@ def regression():
     ax.set_xscale('log', base=2)
     ax.set_title('Number of electrons in event vs arrival time prediction accuracy')
     plt.show()
+    '''
 
     '''
     at_model = CustomMLPModel(700, layer_sizes=[512, 256, 256, NUM_ELECTRONS])

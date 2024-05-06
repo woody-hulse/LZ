@@ -130,6 +130,113 @@ class MLPChannelModel(tf.keras.Model):
         return x
 
 
+class ScaledMeanSquaredError(tf.keras.losses.Loss):
+    def __init__(self, delta=2.0):
+        super().__init__()
+        self.delta = tf.cast(delta, tf.float32)
+    
+    def call(self, y, y_hat):
+        scale = tf.pow(self.delta, tf.cast(y, tf.float32))
+        squared_error = tf.pow(tf.abs(y - y_hat), self.delta)
+        scaled_mean_square_error = tf.reduce_mean(scale * squared_error)
+        return scaled_mean_square_error
+    
+
+class ChannelScaledMeanSquaredError(tf.keras.losses.Loss):
+    def __init__(self, delta=2.0):
+        super().__init__()
+        self.delta = tf.cast(delta, tf.float32)
+    
+    def call(self, y, y_hat):
+        scale = tf.pow(self.delta, tf.cast(y, tf.float32))
+        squared_error = tf.square(y - y_hat)
+        scaled_mean_square_error = tf.reduce_mean(scale * squared_error)
+
+        y_sum = tf.reduce_sum(y, axis=(1, 2))
+        y_hat_sum = tf.reduce_sum(y_hat, axis=(1, 2))
+        mean_squared_error = tf.reduce_sum(tf.square(y_sum - y_hat_sum))
+
+        return scaled_mean_square_error + mean_squared_error
+
+
+class BaselinePhotonModel(tf.keras.Model):
+    def __init__(self, input_size=None, layer_sizes=[1], max=4, name='baseline_photon_model_'):
+        for size in layer_sizes:
+            name += str(size) + '-'
+        name = name[:-1]
+        super().__init__(name=name)
+
+        self.flatten_layer = tf.keras.layers.Flatten()
+        self.dense_layers = [tf.keras.layers.Dense(size, activation='sigmoid') for size in layer_sizes[:-1]]
+        self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
+
+        self.rescale_layer = tf.keras.layers.Rescaling(max + 1, offset=-1e-2)
+        self.optimizer = tf.keras.optimizers.Adam()
+        # self.loss = tf.keras.losses.MeanSquaredError()
+        self.loss = ScaledMeanSquaredError(delta=1.6)
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss)
+            self.build((None, input_size,))
+    
+    def call(self, x):
+        x = self.flatten_layer(x)
+        for layer in self.dense_layers:
+            x = layer(x)
+        x = self.rescale_layer(x)
+        return x
+    
+    def build(self, input_shape):
+        super().build(input_shape)
+        self.rescale_layer.build(input_shape)
+        self.built = True
+    
+class BaselinePhotonClassifier(tf.keras.Model):
+    def __init__(self, input_size=None, layer_sizes=[1], name='baseline_photon_classifier_'):
+        for size in layer_sizes:
+            name += str(size) + '-'
+        name = name[:-1]
+        super().__init__(name=name)
+
+        self.flatten_layer = tf.keras.layers.Flatten()
+        self.dense_layers = [tf.keras.layers.Dense(size, activation='sigmoid') for size in layer_sizes[:-1]]
+        self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='softmax'))
+
+        self.optimizer = tf.keras.optimizers.Adam()
+        self.loss = tf.keras.losses.CategoricalCrossentropy()
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss)
+            self.build((None, input_size))
+    
+    def call(self, x):
+        x = self.flatten_layer(x)
+        for layer in self.dense_layers:
+            x = layer(x)
+        return x
+    
+
+class ChannelPhotonModel(tf.keras.Model):
+    def __init__(self, input_size=None, layer_sizes=[1], max=4, channel_size=16*16, name='channel_photon_model_'):
+        for size in layer_sizes:
+            name += str(size) + '-'
+        name = name[:-1]
+        super().__init__(name=name)
+
+        self.model = BaselinePhotonModel(input_size=input_size, layer_sizes=layer_sizes, max=max)
+
+        self.optimizer = tf.keras.optimizers.Adam()
+        self.loss = tf.keras.losses.MeanSquaredError()
+        # self.loss = ScaledMeanSquaredError(delta=1 + 0.9 ** max)
+        # self.loss = ScaledMeanSquaredError(delta=2)
+        # self.loss = ChannelScaledMeanSquaredError(delta=2)
+        if input_size:
+            self.compile(optimizer=self.optimizer, loss=self.loss)
+            self.build((None, channel_size, 1))
+    
+    def call(self, x):
+        x = tf.keras.layers.TimeDistributed(self.model)(x)
+        return x
+
+
 class CustomMLPModel(tf.keras.Model):
     def __init__(self, input_size=None, layer_sizes=[1], classification=False, name='mlp_model_'):
         for size in layer_sizes:

@@ -11,14 +11,15 @@ G2              = 47.35
 EGASWIDTH       = 450
 PHDWIDTH        = 20
 SAMPLERATE      = 10
-NUM_ELECTRONS   = 1
+NUM_ELECTRONS   = 148
 
 def gaussian(x, C, mu, sigma):
     return C*np.exp(-(x-mu)**2/(2*sigma**2))
 
 def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=NUM_ELECTRONS // 2):
-    summed_pulse = np.zeros(size)
-    pulse = np.zeros((num_rows, num_cols, size))
+    summed_pulse = np.zeros(size, dtype=np.float16)
+    pulse = np.zeros((num_rows, num_cols, size), dtype=np.float16)
+    photon_pulse = np.zeros((num_rows, num_cols, size), dtype=np.int8)
 
     photon_interval_width = PHDWIDTH // SAMPLERATE * 3
     photon_interval = np.array([i for i in range(-photon_interval_width, photon_interval_width + 1)])
@@ -42,12 +43,14 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=N
             valid_indices = (photon_indices >= 0) & (photon_indices < size)
             photon_emmission = gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width)
             summed_pulse[photon_indices[valid_indices]] += photon_emmission
-            pulse[min(num_cols - 1, max(0, int(pr[p])))][min(num_rows - 1, max(0, int(pc[p])))][photon_indices[valid_indices]] += photon_emmission
+            pri, pci = min(num_cols - 1, max(0, int(pr[p]))), min(num_rows - 1, max(0, int(pc[p])))
+            pulse[pri][pci][photon_indices[valid_indices]] += photon_emmission
+            photon_pulse[pri][pci][photon_index] += 1
             # pulse[r][c][photon_index] = 1
 
     # electron_arrival_times.sort()
 
-    return summed_pulse, pulse, electron_arrival_times
+    return summed_pulse, pulse, photon_pulse, electron_arrival_times
 
 def generate_pulse(mu=350, size=700, num_electrons=NUM_ELECTRONS // 2):
     summed_pulse = np.zeros(size)
@@ -69,7 +72,7 @@ def generate_pulse(mu=350, size=700, num_electrons=NUM_ELECTRONS // 2):
             summed_pulse[photon_indices[valid_indices]] += gaussian(photon_indices[valid_indices], 1, electron_arrival_times[e], phd_sample_width)
 
     # electron_arrival_times.sort()
-    return summed_pulse, None, electron_arrival_times
+    return summed_pulse, None, None, electron_arrival_times
 
 
 def generate_binary_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=NUM_ELECTRONS):
@@ -94,7 +97,7 @@ def generate_binary_channel_pulse(num_rows, num_cols, mu=350, size=700, num_elec
 
     # electron_arrival_times.sort()
 
-    return summed_pulse, pulse, electron_arrival_times
+    return summed_pulse, pulse, None, electron_arrival_times
 
         
 def generate_ms_pulse(delta_mu=100):
@@ -143,62 +146,70 @@ def generate_pulse_dataset(num_pulses, bins=20, max_delta_mu=1000, arrival_times
     if arrival_times: return pulses, delta_mu, electron_arrival_times
     else: return pulses, delta_mu
 
-
 def pulse_task(dmu, bin_sizes, num_electrons):
     pulses = []
     summed_pulses = []
+    photon_pulses = []
     electron_arrival_times = []
     for _ in range(bin_sizes):
-        summed_pulse, pulse, eats = generate_pulse(num_electrons=num_electrons)
+        summed_pulse, pulse, photon_pulse, eats = generate_pulse(num_electrons=num_electrons)
         pulses.append(pulse)
+        photon_pulses.append(photon_pulse)
         summed_pulses.append(summed_pulse)
         eats.sort()
         electron_arrival_times.append(eats)
-    return summed_pulses, pulses, electron_arrival_times, [dmu] * bin_sizes
+    return summed_pulses, pulses, photon_pulses, electron_arrival_times, [dmu] * bin_sizes
 
 def channel_pulse_task(dmu, bin_sizes, num_electrons):
     pulses = []
     summed_pulses = []
+    photon_pulses = []
     electron_arrival_times = []
     for _ in range(bin_sizes):
-        summed_pulse, pulse, eats = generate_channel_pulse(num_rows=16, num_cols=16, num_electrons=num_electrons)
+        summed_pulse, pulse, photon_pulse, eats = generate_channel_pulse(num_rows=16, num_cols=16, num_electrons=num_electrons)
         pulses.append(pulse)
         summed_pulses.append(summed_pulse)
+        photon_pulses.append(photon_pulse)
         eats.sort()
         electron_arrival_times.append(eats)
-    return summed_pulses, pulses, electron_arrival_times, [dmu] * bin_sizes
+    return summed_pulses, pulses, photon_pulses, electron_arrival_times, [dmu] * bin_sizes
 
 def ms_channel_pulse_task(dmu, bin_sizes, num_electrons):
     pulses = []
     summed_pulses = []
+    photon_pulses = []
     electron_arrival_times = []
     for _ in range(bin_sizes):
         diff = (dmu / SAMPLERATE) // 2
-        summed_pulse_1, pulse_1, eats_1 = generate_channel_pulse(num_rows=16, num_cols=16, mu=350 - diff, size=700, num_electrons=num_electrons)
-        summed_pulse_2, pulse_2, eats_2 = generate_channel_pulse(num_rows=16, num_cols=16, mu=350 + diff, size=700, num_electrons=num_electrons)
+        summed_pulse_1, pulse_1, photon_pulse_1, eats_1 = generate_channel_pulse(num_rows=16, num_cols=16, mu=350 - diff, size=700, num_electrons=num_electrons)
+        summed_pulse_2, pulse_2, photon_pulse_2, eats_2 = generate_channel_pulse(num_rows=16, num_cols=16, mu=350 + diff, size=700, num_electrons=num_electrons)
 
         summed_pulse = summed_pulse_1 + summed_pulse_2
         pulse = pulse_1 + pulse_2
+        photon_pulse = photon_pulse_1 + photon_pulse_2
 
         eats = np.concatenate([eats_1, eats_2], axis=0)
         eats.sort()
         pulses.append(pulse)
         summed_pulses.append(summed_pulse)
+        photon_pulses.append(photon_pulse)
         electron_arrival_times.append(eats)
 
-    return summed_pulses, pulses, electron_arrival_times, [dmu] * bin_sizes
+    return summed_pulses, pulses, photon_pulses, electron_arrival_times, [dmu] * bin_sizes
 
 def binary_channel_pulse_task(dmu, bin_sizes, num_electrons):
     pulses = []
     summed_pulses = []
+    photon_pulses = []
     electron_arrival_times = []
     for _ in range(bin_sizes):
-        summed_pulse, pulse, eats = generate_binary_channel_pulse(num_rows=10, num_cols=10, num_electrons=num_electrons)
+        summed_pulse, pulse, photon_pulse, eats = generate_binary_channel_pulse(num_rows=10, num_cols=10, num_electrons=num_electrons)
         pulses.append(pulse)
+        photon_pulses.append(photon_pulse)
         summed_pulses.append(summed_pulse)
         eats.sort()
         electron_arrival_times.append(eats)
-    return summed_pulses, pulses, electron_arrival_times, [dmu] * bin_sizes
+    return summed_pulses, pulses, photon_pulses, electron_arrival_times, [dmu] * bin_sizes
 
 
 def generate_pulse_dataset_multiproc(num_pulses, bins=20, max_delta_mu=1000, arrival_times=True, save=False, num_electrons=NUM_ELECTRONS, task=pulse_task):
@@ -212,37 +223,41 @@ def generate_pulse_dataset_multiproc(num_pulses, bins=20, max_delta_mu=1000, arr
 
     summed_pulses = []
     pulses = []
+    photon_pulses = []
     electron_arrival_times = []
     delta_mu = []
     for result in results:
         summed_pulses += result[0]
         pulses += result[1]
-        electron_arrival_times += result[2]
-        delta_mu += result[3]
+        photon_pulses += result[2]
+        electron_arrival_times += result[3]
+        delta_mu += result[4]
     end_time = time.time()
     debug_print(['Multiprocessor dataset generation time:', end_time - start_time, 's'])
 
     summed_pulses = np.array(summed_pulses)
     pulses = np.array(pulses)
+    photon_pulses = np.array(photon_pulses)
     delta_mu = np.array(delta_mu)
     electron_arrival_times = np.array(electron_arrival_times)
 
-    if save: save_pulse_dataset(summed_pulses, pulses, delta_mu, electron_arrival_times, arrival_times)
+    if save: save_pulse_dataset(summed_pulses, pulses, photon_pulses, delta_mu, electron_arrival_times, arrival_times)
 
     if arrival_times: return summed_pulses, pulses, delta_mu, electron_arrival_times
     else: return summed_pulses, pulses, delta_mu
 
 
-def save_pulse_dataset(summed_pulses, pulses, delta_mu, electron_arrival_times, arrival_times):
+def save_pulse_dataset(summed_pulses, pulses, photon_pulses, delta_mu, electron_arrival_times, arrival_times):
     debug_print(['saving dataset'])
     num_pulses = pulses.shape[0]
     e = '{:.1e}'.format(num_pulses)
     weat = '_withEAT' if arrival_times else ''
-    fname = f'../dSSdMS/dSS_2400419_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered{weat}_{NUM_ELECTRONS}_electrons.npz'
+    fname = f'../dSSdMS/dSS_2400425_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered.npz'
     np.savez_compressed(
         file=fname,
         events=summed_pulses,
         channel_events=pulses,
+        photon_events=photon_pulses,
         delta_mu=delta_mu,
         electron_arrival_times=electron_arrival_times
     )
@@ -254,10 +269,11 @@ def load_pulse_dataset(file):
     with np.load(file, allow_pickle=True) as f:
         summed_pulses = f['events']
         pulses = f['channel_events']
+        photon_pulses = f['photon_events']
         delta_mu = f['delta_mu']
         electron_arrival_times = f['electron_arrival_times']
     
-    return summed_pulses, pulses, delta_mu, electron_arrival_times
+    return summed_pulses, pulses, photon_pulses, delta_mu, electron_arrival_times
 
 
 def at_to_hist(at):
@@ -277,9 +293,9 @@ def plot_at_hists(hist, label):
 
 
 def main():
-    generate_pulse_dataset_multiproc(100000, bins=20, max_delta_mu=1000, arrival_times=True, save=True,
+    generate_pulse_dataset_multiproc(50000, bins=20, max_delta_mu=0, arrival_times=True, save=True,
                                      
-                                     task = pulse_task
+                                     task = channel_pulse_task
                                      
                                      )
 
