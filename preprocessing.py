@@ -427,3 +427,11 @@ def get_windowed_data(X, Y, window_size=100):
         X_windowed.append(X[i:i+window_size])
         Y_windowed.append(Y[i+window_size//2])
     return np.array(X_windowed), np.array(Y_windowed)
+
+def train_test_split_all(data, test_size=0.2):
+    train, test = [], []
+    split = test_size * data[0].shape[0]
+    for x in data:
+        train.append(x[:split])
+        test.append(x[split:])
+    return train, test

@@ -160,7 +160,7 @@ class ChannelScaledMeanSquaredError(tf.keras.losses.Loss):
 
 
 class BaselinePhotonModel(tf.keras.Model):
-    def __init__(self, input_size=None, layer_sizes=[1], max=4, name='baseline_photon_model_'):
+    def __init__(self, input_size=None, layer_sizes=[1], max=4, delta=1.6, name='baseline_photon_model_'):
         for size in layer_sizes:
             name += str(size) + '-'
         name = name[:-1]
@@ -173,7 +173,7 @@ class BaselinePhotonModel(tf.keras.Model):
         self.rescale_layer = tf.keras.layers.Rescaling(max + 1, offset=-1e-2)
         self.optimizer = tf.keras.optimizers.Adam()
         # self.loss = tf.keras.losses.MeanSquaredError()
-        self.loss = ScaledMeanSquaredError(delta=1.6)
+        self.loss = ScaledMeanSquaredError(delta=delta)
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
             self.build((None, input_size,))

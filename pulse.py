@@ -1,5 +1,6 @@
 import numpy as np
 from matplotlib import pyplot as plt
+import multiprocessing
 from multiprocessing import Pool
 import time
 
@@ -36,12 +37,12 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=N
         photon_arrival_times = np.random.normal(electron_arrival_times[e], EGASWIDTH / SAMPLERATE, num_photons[e])
         for p in range(num_photons[e]):
             # Not considering multiple photoelectron emission
-            # num_photoelectrons = np.abs(np.random.normal(1, 0.4))
+            num_photoelectrons = np.abs(np.random.normal(1, 0.4))
             
             photon_index = int(photon_arrival_times[p])
             photon_indices = photon_index + photon_interval
             valid_indices = (photon_indices >= 0) & (photon_indices < size)
-            photon_emmission = gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width)
+            photon_emmission = gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width) * num_photoelectrons
             summed_pulse[photon_indices[valid_indices]] += photon_emmission
             pri, pci = min(num_cols - 1, max(0, int(pr[p]))), min(num_rows - 1, max(0, int(pc[p])))
             pulse[pri][pci][photon_indices[valid_indices]] += photon_emmission
@@ -218,7 +219,7 @@ def generate_pulse_dataset_multiproc(num_pulses, bins=20, max_delta_mu=1000, arr
 
     debug_print(['generating dataset'])
     start_time = time.time()
-    with Pool() as pool:
+    with Pool(processes=multiprocessing.cpu_count()-2) as pool:
         results = pool.starmap(task, tasks)
 
     summed_pulses = []
@@ -252,7 +253,7 @@ def save_pulse_dataset(summed_pulses, pulses, photon_pulses, delta_mu, electron_
     num_pulses = pulses.shape[0]
     e = '{:.1e}'.format(num_pulses)
     weat = '_withEAT' if arrival_times else ''
-    fname = f'../dSSdMS/dSS_2400425_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered.npz'
+    fname = f'../dSSdMS/dSS_2400501_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered.npz'
     np.savez_compressed(
         file=fname,
         events=summed_pulses,

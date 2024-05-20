@@ -24,29 +24,34 @@ from experiments import *
 from autoencoder import *
 from pulse import *
 
-DATE = ' [4-19-24]'
+DATE = ' [5-15-24]'
 
-# import importlib
-# importlib.reload(regression_models)
-
-DSS_NAME = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
-DMS_NAME = '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
-DMS_NAMES = [
-    '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
-    # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz',
-    # '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch02.npz'
+'''
+Data filepaths
+'''
+# Typical single scatter (SS) events (100k)
+DS_FILE = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
+# Typical multi-scatter (MS) events (100k)
+DMS_FILE = '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
+# Three batches of MS events (100k x 3)
+DMS_FILES = [
+    '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
+    '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch01.npz',
+    '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch02.npz'
 ]
-DMS_NAMES = ['../dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz']
-DSS_SIMPLE_NAME = '/Users/woodyhulse/Documents/lz/dSSdMS/dSS_2400419_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_withEAT_1e.npz'
-DMS_AT_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT_10e.npz'
-DMS_AT_CHANNEL_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
-DMS_CHANNEL_NAME = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
+# Single-photon SS events (100k)
+DSS_SIMPLE_FILE = '/Users/woodyhulse/Documents/lz/dSSdMS/dSS_2400419_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_withEAT_1e.npz'
+# MS events with corresponding electron arrival times
+DMS_AT_FILE = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT_10e.npz'
+# MS events with channel-level resolution and corresponding electron arrival times
+DMS_AT_CHANNEL_FILE = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
+# MS events with channel-level resolution
+DMS_CHANNEL_FILE = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
+# SS events with associated (binned) photon arrivals
+DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400501_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz'
 
-DSS_CHANNEL_PHOTON = '../dSSdMS/dSS_2400425_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz'
-
-# '/Users/woodyhulse/Documents/lz/dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
-
-MODEL_SAVE_PATH = 'saved_models/'
+# Default save directory for stored models
+MODEL_SAVE_PATH_FILE = 'saved_models/'
 
 '''
 Training function for tensorflow model
@@ -92,49 +97,6 @@ def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2
     
     return history
 
-'''
-Perform classification-based tasks and experiments
-'''
-def classification():
-    num_samples = 30000
-
-    dSS = DS(DSS_NAME)
-    dMS = DS(DMS_NAME)
-
-    debug_print(['preprocessing data'])
-    data_indices = np.array([i for i in range(len(dSS.ULvalues) + len(dMS.ULvalues))])
-    np.random.shuffle(data_indices)
-    X = np.concatenate([dSS.DSdata, dMS.DSdata], axis=0)[data_indices][:num_samples]
-    X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
-
-    X_avg = normalize(np.average(X, axis=0))
-    x = np.linspace(0, X.shape[1], X.shape[1])
-    params, cov = curve_fit(gaussian, x, X_avg)
-    X_dist = gaussian(x, *params)
-    X_dev = np.concatenate([np.expand_dims(X[i] / X_dist, axis=0) for i in range(X.shape[0])], axis=0)
-    X_diff = np.concatenate([np.expand_dims(X[i] - X_dist, axis=0) for i in range(X.shape[0])], axis=0)
-
-    X = np.expand_dims(X, axis=-1)
-    Y = np.concatenate([
-        [0 for _ in range(len(dSS.ULvalues))],
-        [1 for _ in range(len(dMS.ULvalues))]
-        ], axis=0)[data_indices][:num_samples]
-    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-    # X_dev_train, X_dev_test, Y_train, Y_test = train_test_split(X_dev, Y, test_size=0.2, random_state=42)
-    # X_diff_train, X_diff_test, Y_train, Y_test = train_test_split(X_diff, Y, test_size=0.2, random_state=42)
-
-    debug_print(['     X_train:', X_train.shape])
-    debug_print(['     Y_train:', Y_train.shape])
-
-    # test_model = build_vgg(length=700, name='vgg', width=16) # MLPModel(output_size=1)
-    baseline_model = MLPModel(input_size=700, classification=True)
-    test_model = HybridModel(input_size=700, classification=True)
-    test_model2 = ConvNoAttentionModel(input_size=700,  output_size=1, classification=True)
-
-    # train(baseline_model, X_train, Y_train, epochs=50, batch_size=16, callbacks=False)
-    train(test_model2, X_train, Y_train, epochs=50, batch_size=128, callbacks=False)
-    # train(test_model2, X_dev_train, Y_train, epochs=25, batch_size=16, compile=True)
-    # train(test_model3, X_diff_train, Y_train, epochs=25, batch_size=16, compile=True)
 
 '''
 Plot the distribution of pulse delta mu labels
@@ -154,6 +116,10 @@ def plot_distribution(Y):
 Perform regression-based tasks and experiments
 '''
 def regression():
+
+    '''
+    Data preprocessing
+    '''
     np.random.seed(42)
     num_events = 50000
 
@@ -171,15 +137,13 @@ def regression():
     PXC = np.array([None for _ in range(int(1e6))])
     areafrac = np.array([None for _ in range(int(1e6))])
     AT = np.array([None for _ in range(int(1e6))])
-    
-    # X, Y, AT = generate_ms_pulse_dataset(num_samples, arrival_times=True, save=True)
-    # X, Y, AT = generate_ms_pulse_dataset_multiproc(num_samples, arrival_times=True, save=True)
-    X, XC, PXC, Y, AT = load_pulse_dataset(DSS_CHANNEL_PHOTON)
 
-    # XS = np.sum(XC, axis=(1, 2))
-    # XB = np.max(XC, axis=(1, 2))
+    X, XC, PXC, Y, AT = load_pulse_dataset(DSS_CHANNEL_PHOTON_FILE)
 
-    '''
+    # X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+    X_XC_PXC_Y_AT_train, X_XC_PXC_Y_AT_test = train_test_split_all([X, XC, PXC, Y, AT], test_size=0.2)
+
+    ''' Plot hit patterns of simulated channel-level events
     image_frames = []
     imgs = np.transpose(XC[:10], axes=[0, 3, 1, 2])
     for t in imgs[0]:
@@ -207,12 +171,12 @@ def regression():
     # plot_distribution(Y)
     event_indices = np.array([i for i in range(min(X.shape[0], num_events))])
     np.random.shuffle(event_indices)
-    X = X[event_indices][:num_events]
-    XC = XC[event_indices][:num_events]
-    PXC = PXC[event_indices][:num_events]
-    Y = Y[event_indices][:num_events]
-    AT = AT[event_indices][:num_events]
-    areafrac = areafrac[event_indices][:num_events]
+    X = X[event_indices][:num_events]               # Summed pulse signal
+    XC = XC[event_indices][:num_events]             # Channel pulse signal
+    PXC = PXC[event_indices][:num_events]           # Photon count channel pulse signal
+    Y = Y[event_indices][:num_events]               # Delta mu for MS, 0 for SS
+    AT = AT[event_indices][:num_events]             # Electron arrival tiimes
+    areafrac = areafrac[event_indices][:num_events] # Area fraction of MS pulse
 
     num_samples = 1000000
     sample_indices = np.array([i for i in range(num_samples)])
@@ -223,470 +187,17 @@ def regression():
     PX_FLAT = np.reshape(np.sum(PXC, axis=(1, 2)), (-1, 1))
 
     '''
-    PXC_OHE = np.eye(5)[PXC_FLAT[:, 0]]
-    photon_classifier = BaselinePhotonClassifier(input_size=1, layer_sizes=[1, 32, 32, 5])
-    train(photon_classifier, XC_FLAT, PXC_OHE, epochs=10, batch_size=128)
-
-    '''
-
-    # y = PXC_FLAT
-    # y_hat = np.zeros_like(PXC_FLAT)
-
-    # plot_mse_histogram(y, y_hat, title='Baseline MSE for each photon count [4-25-24]')
-
-    '''
-
-    counts, bins = np.histogram(PXC_FLAT)
-    counts, bins = counts[:5], bins[:6]
-    plt.stairs(counts / len(PXC_FLAT), bins - 0.5)
-    for i in range(len(counts)):
-        plt.text(bins[i], counts[i] / len(PXC_FLAT) + 0.01, str(round(counts[i] / len(PXC_FLAT), 4)), ha='center')
-    
-    plt.xlabel('Photon count')
-    plt.ylabel('Proportion of dataset')
-    plt.title('Proportion of each photon count in simulated SS channel pulse')
-    plt.show()
-
-    '''
-
-
-
-
-    for window_size in [16]:
-        X_chunks, Y_chunks = get_windowed_data(XC_FLAT[:num_samples + window_size], PXC_FLAT[:num_samples + window_size], window_size)
-
-        photon_model = BaselinePhotonModel(input_size=window_size, layer_sizes=[32, 32, 1], max=4)
-        train(photon_model, X_chunks[sample_indices], Y_chunks[sample_indices], epochs=50, batch_size=512)
-        y_hat = photon_model(X_chunks[:100000])
-        y = Y_chunks[:100000]
-        plot_mse_histogram(y, y_hat, title=f'window={window_size} model MSE for each photon count [4-25-24]', save_path=f'{window_size}_gram_mse_smse')
-
-        num_tests = 5
-        for i in range(num_tests):
-            x, y = np.transpose(np.reshape(XC[i], (16*16, 700))), np.transpose(np.reshape(PXC[i], (16*16, 700)))
-            y_ = np.empty_like(y[window_size//2:-window_size//2], dtype=np.float32)
-            for c in range(16*16):
-                x_chunks, y_chunks = get_windowed_data(x[:, c], y[:, c], window_size)
-                y_[:, c] = photon_model(x_chunks)[:, 0]
-            y = y[window_size//2:-window_size//2]
-            
-            plt.figure(figsize=(8, 6))
-            plt.plot(np.sum(y, axis=(1)), label='True summed pulse')
-            plt.plot(np.sum(y_, axis=(1)), label='Predicted summed pulse', color='orange')
-            plt.plot(np.sum(np.round(y_, decimals=0), axis=1), label='Predicted summed pulse (rounded)', color='red', alpha=0.5) 
-
-            plt.xlabel('Sample')
-            plt.ylabel('Photon count')
-            plt.title(f'window={window_size} SS pulse summed photon count prediction')
-            plt.legend()
-            # plt.show()
-            plt.savefig(f'window_{window_size}_{i}_pulse_summed_smse')
-            plt.clf()
-
-
-            channel = 36
-            plt.figure(figsize=(8, 6))
-            plt.plot(y[:, channel], label=f'Channel {channel} pulse')
-            plt.plot(y_[:, channel], label=f'Predicted channel pulse')
-            plt.xlabel('Sample')
-            plt.ylabel('Photon count')
-            plt.title(f'window={window_size} single channel photon count prediction')
-            plt.legend()
-            plt.savefig(f'window_{window_size}_{i}_pulse_smse')
-            plt.clf()
-            # plt.show()
-
-    
-    '''
-    X, Y = np.transpose(np.reshape(XC, (-1, 16*16, 700, 1)), axes=(0, 2, 1, 3)), np.transpose(np.reshape(PXC, (-1, 16*16, 700, 1)), axes=(0, 2, 1, 3))
-    # X = np.transpose(np.reshape(XC, (-1, 16*16, 700)), (0, 2, 1))
-    # Y = np.transpose(np.reshape(PXC, (-1, 16*16, 700)), (0, 2, 1))
-    # X_, Y_ = np.reshape(XC, (-1, 16*16, 1)), np.reshape(PXC, (-1, 16*16, 1))
-    X_, Y_ = np.reshape(X, (-1, 16*16, 1)), np.reshape(Y, (-1, 16*16, 1))
-
-    # xs, ys = np.sum(X_, axis=(1, 2)), np.sum(Y_, axis=(1, 2))
-    # plt.plot(xs[sample_indices][:1000])
-    # plt.plot(ys[sample_indices][:1000])
-    # plt.show()
-
-    # return
-
-    photon_model = ChannelPhotonModel(input_size=1, layer_sizes=[32, 32, 1], max=np.max(Y))
-    train(photon_model, X_[sample_indices], Y_[sample_indices], epochs=40, batch_size=512)
-
-    num_tests = 5
-    for i in range(num_tests):
-        x, y = X[i], Y[i]
-        y_ = photon_model(x)
-        plt.plot(np.sum(y, axis=(1)))
-        plt.plot(np.sum(y_, axis=(1, 2)))
-        plt.show()
-    '''
-
-
-
-    '''
-    X, Y = XC_FLAT, PXC_FLAT
-
-    print(X.shape, Y.shape)
-
-    photon_model = BaselinePhotonModel(input_size=1, layer_sizes=[1, 32, 32, 1], max=np.max(Y))
-    train(photon_model, X[sample_indices], Y[sample_indices], epochs=100, batch_size=256)
-
-    num_samples = 5000
-    xc = X[:num_samples]
-    pxc = Y[:num_samples]
-    pxc_ = photon_model(xc)
-    # pxc_ = np.argmax(photon_classifier(xc).numpy(), axis=1)
-
-    plt.plot(pxc)
-    plt.plot(pxc_)
-    # max_photons = np.max(pxc)
-    # x = np.arange(0, max_photons, 1)
-    # plt.scatter(pxc, pxc_)
-    # plt.plot(x, x, color='red')
-    plt.show()
-    '''
-
-
-    # AT_hist = at_to_hist(AT)
-
-    '''
-    X2, Y2 = generate_ms_pulse_dataset(num_samples)
-
-    di = np.array([i for i in range(len(X2))])
-    np.random.shuffle(di)
-    X2 = X2[di]
-    X2 = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X2], axis=0)
-
-    for i1 in range(25):
-        x1, y1 = X[i1], Y[i1]
-
-        y2 = -1
-        while y2 != y1:
-            i2 = np.random.randint(0, num_samples)
-            x2, y2 = X2[i2], Y2[i2]
-            print(y1, y2)
-        
-        print(y1)
-        plt.plot(x1)
-        plt.plot(x2)
-        plt.show()
-    '''
-
-    # X = jitter_pulses(X, t=20)
-    '''
-    X_avg = normalize(np.average(X, axis=0))
-    x = np.linspace(0, X.shape[1], X.shape[1])
-    params, cov = curve_fit(gaussian, x, X_avg)
-    X_dist = gaussian(x, *params)
-    X_dist = np.expand_dims(X_dist, axis=-1)
-    '''
-    '''
-    X_dev = np.concatenate([np.expand_dims(X[i] / X_dist, axis=0) for i in range(X.shape[0])], axis=0)
-    X_diff = np.concatenate([np.expand_dims(X[i] - X_dist, axis=0) for i in range(X.shape[0])], axis=0)
-    '''
-
-    '''
-    X_fft = np.concatenate([np.expand_dims(fourier_decomposition(x, plot=False), axis=0) for x in tqdm(X)])
-    X_fft = np.expand_dims(X_fft, axis=-1)
-
-    X_dev_train, X_dev_test, Y_train, Y_test = train_test_split(X_dev, Y, test_size=0.2, random_state=42)
-    X_diff_train, X_diff_test, Y_train, Y_test = train_test_split(X_diff, Y, test_size=0.2, random_state=42)
-    '''
-
-    # X = np.expand_dims(X, axis=-1)
-    # X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-    # X_fft_train, X_fft_test, Y_train, Y_test = train_test_split(X_fft, Y, test_size=0.2, random_state=42)
-    # X_1090_train = add_1090(X_train)
-    # X_1090_test = add_1090(X_test)
-
-    # debug_print(['     X_train:', X_train.shape])
-    # debug_print(['     Y_train:', Y_train.shape])
-
-    '''
     Experiments
     '''
 
-
-    '''
-    model = CustomMLPModel(700, layer_sizes=[700, 700, 700])
-    train(model, XS, X, epochs=15, batch_size=512, callbacks=True)
-
-    for x, xb in zip(X[:10], XS[:10]):
-        x_hat = model(np.expand_dims(xb, axis=0))[0]
-        plt.plot(x_hat, label='Reconstructed pulse')
-        plt.plot(x, label='True pulse')
-        plt.legend()
-        plt.show()
-        plt.plot(xb)
-        plt.title('Binary pulse' + DATE)
-        plt.show()
-    '''
-
-
-    '''
-    ATH = np.array([[0]] for at in AT[:10])
-    ATH = np.zeros(X.shape)
-    for i, at in tqdm(enumerate(AT)):
-        hist, bins = np.histogram(at, bins=np.arange(701))
-        ATH[i] = hist
-
-    at_model = CustomMLPBinnedModel(700, layer_sizes=[700, 700, 700])
-    train(at_model, X, ATH, epochs=50, batch_size=128, callbacks=True)
-
-    for i in range(10):
-        at = ATH[i]
-        at_hat = at_model(np.expand_dims(X[i], axis=0))[0]
-        plot_at_hists(at_hat, label='Predicted arrival times')
-        plot_at_hists(at, label='True arrival times')
-        plt.title('True vs predicted histogram of electron arrival times')
-        plt.xlabel('Arrival time (samples, 10ns)')
-        plt.ylabel('Number of electrons')
-        plt.legend()
-        plt.show()
-    '''
-
-    '''
-    # channel_model =  MLPChannelModel(input_size=700, head_sizes=[256, 128, 16], layer_sizes=[256, 256, 1], heads=5)
-    channel_model = ConvChannelModel(input_size=list(XC.shape[1:]))
-    train(channel_model, XC, Y, epochs=100, batch_size=128, callbacks=True, summary=True)
-
-    # linearity_plot(channel_model, (XC, Y))
-
-    model = CustomMLPModel(700, layer_sizes=[512, 256, 128, 1])
-    train(model, X, Y, epochs=100, batch_size=128)
-    '''
-
-    '''
-    model = CustomMLPModel(700, layer_sizes=[512, 256, 256, NUM_ELECTRONS])
-    train(model, X, AT, epochs=10, batch_size=128)
-
-    test_samples = 10
-    for x, dmu, at in zip(X[:test_samples], Y[:test_samples], AT[:test_samples]):
-        at_hat = model(np.expand_dims(x, axis=0))[0]
-        plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
-        plt.plot(x, label='Event')
-        plt.axvline(x=at_hat, color='#CC4F1B',  linestyle='--', label='Arrival time prediction')
-        # plt.plot(at, marker='+', label='True electron arrival times')
-        # plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
-        # plt.ylabel('Arrival time (samples, 10ns)')
-        plt.xlabel('Sample')
-        # plt.ylim((0, 700))
-        plt.legend()
-        plt.show()
-
-        continue 
-    '''
-
-    '''
-
-    electron_counts = [256]
-    errors = []
-    for n in electron_counts:
-        X, XC, Y, AT = generate_pulse_dataset_multiproc(100000, bins=20, max_delta_mu=0, arrival_times=True, save=False, task=pulse_task, num_electrons=n)
-
-        model = CustomMLPModel(700, layer_sizes=[512, 256, 256, n])
-        train(model, X, AT, epochs=128, batch_size=256, summary=True)
-
-        x = X[:500]
-        at = AT[:500]
-        at_ = model(X[:500])
-        error = tf.keras.losses.MeanSquaredError()(at, at_).numpy()
-        error_scatterplot(at, at_)
-        errors.append(error)
-
-        test_samples=4
-        for i, (x, dmu, at) in enumerate(zip(X[:test_samples], Y[:test_samples], AT[:test_samples])):
-            at_hat = model(np.expand_dims(x, axis=0))[0]
-            plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
-            plt.plot(at, marker='+', label='True electron arrival times')
-            plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
-            plt.ylabel('Arrival time (samples, 10ns)')
-            plt.xlabel('Sample')
-            # plt.ylim((0, 700))
-            plt.legend()
-            plt.savefig(f'eat_{n}_{i}')
-            plt.clf()
-    
-    fig, ax = plt.subplots()
-    ax.plot(electron_counts, errors, marker='+')
-    ax.set_ylabel('MSE')
-    ax.set_xlabel('Event electron count')
-    ax.set_xscale('log', base=2)
-    ax.set_title('Number of electrons in event vs arrival time prediction accuracy')
-    plt.show()
-    '''
-
-    '''
-    at_model = CustomMLPModel(700, layer_sizes=[512, 256, 256, NUM_ELECTRONS])
-    # at_model = ConvChannelModel(700, layer_sizes=[1024, 512, 256, NUM_ELECTRONS])
-    # at_model = MLPChannelModel(input_size=700, head_sizes=[256, 128, 16], layer_sizes=[256, 256, NUM_ELECTRONS], heads=5)
-    train(at_model, X, AT, epochs=300, batch_size=256, callbacks=False, summary=True)
-    # AT_hat = at_model(X[:10000])
-    # residual_plot(AT[:10000], AT_hat)
-    # error_scatterplot(AT[:10000], AT_hat)
-
-    
-    for i in range(10):
-        at = AT[i]
-        at_hat = at_model(np.expand_dims(X[i], axis=0))[0]
-
-        plt.title('True vs predicted electron arrival times for Δμ=0 pulse')
-        plt.plot(at, label='True electron arrival times')
-        plt.plot(at_hat, label='Predicted electron arrival times')
-        plt.ylabel('Arrival time (samples, 10ns)')
-        plt.xlabel('Electron number')
-        plt.legend()
-        plt.show()
-    '''
-
-    '''
-        at_hat_hist, _ = np.histogram(at_hat, bins=np.arange(0, 700, 1))
-        at_hist, _ = np.histogram(at, bins=np.arange(0, 700, 1))
-        plot_at_hists(at_hat_hist, label='Predicted arrival times')
-        plot_at_hists(at_hist, label='True arrival times')
-        plt.title('True vs predicted histogram of electron arrival times')
-        plt.xlabel('Arrival time (samples, 10ns)')
-        plt.ylabel('Number of electrons')
-        plt.legend()
-        plt.show()
-        '''
-
-    '''
-
-    test_samples = 10
-    for x, dmu, at in zip(X[:test_samples], Y[:test_samples], AT[:test_samples]):
-        at_hat = at_model(np.expand_dims(x, axis=0))[0]
-        plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
-        plt.plot(at, marker='+', label='True electron arrival times')
-        plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
-        plt.ylabel('Arrival time (samples, 10ns)')
-        plt.xlabel('Electron number')
-        plt.legend()
-        plt.show()
-
-        continue
-
-    at_model = CustomMLPModel(700, layer_sizes=[2048, 1024, 256, NUM_ELECTRONS])
-
-
-
-    at_model = ConvChannelModel(700, layer_sizes=[1024, 512, 256, NUM_ELECTRONS])
-    train(at_model, XC, AT, epochs=100, batch_size=128)
-
-    test_samples = 10
-    for x, dmu, at in zip(XC[:test_samples], Y[:test_samples], AT[:test_samples]):
-        at_hat = at_model(np.expand_dims(x, axis=0))[0]
-        plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
-        plt.plot(at, marker='+', label='True electron arrival times')
-        plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
-        plt.ylabel('Arrival time (samples, 10ns)')
-        plt.xlabel('Electron number')
-        plt.legend()
-        plt.show()
-
-        continue
-    '''
-        
-    
-
-    '''
-
-    ae = Autoencoder(
-        input_size=700, 
-        encoder_layer_sizes=[512, 256, 32],
-        decoder_layer_sizes=[256, 700]
-    )
-
-    vqvae = VQVariationalAutoencoder(
-        input_size=700, 
-        num_embeddings=65536, 
-        encoder_layer_sizes=[512, 256, 128],
-        decoder_layer_sizes=[256, 700]
-    )
-
-    # train(ae, X_train, X_train, epochs=20, batch_size=128)
-    train(vqvae, X_train, X_train, epochs=20, batch_size=256)
-
-    for x in X[:4]:
-        x_hat = vqvae(np.array([x]))[0]
-        plt.plot(x)
-        plt.plot(x_hat)
-        plt.show()
-
-    '''
-
-    '''
-    
-    at_weight = 1e-7
-    mhae = MultiHeaddedAutoencoder(
-        input_size=700, 
-        encoder_layer_sizes=[512, 256, 16], 
-        decoders=[[256, 512, 700], [128, 128, 148]],
-        loss_weights=[1 - at_weight, at_weight])
-    
-    
-    
-    # train(mhae, X, [X, AT], epochs=20, batch_size=128, summary=True)
-
-    compare_latent_dim_compression_at([1, 2, 4, 8, 16, 32, 64, 128, 256], X, Y, AT, X[:100], Y[:100], AT[:100])
-
-    at_model = CustomMLPModel(input_size=np.prod(X.shape[1:]), layer_sizes=[512, 256, 256, NUM_ELECTRONS])
-    train(at_model, X, AT, epochs=10, batch_size=4, summary=True)
-
-    test_samples = 10
-    for x, dmu, at in zip(X[:test_samples], Y[:test_samples], AT[:test_samples]):
-        at_hat = at_model(np.expand_dims(x, axis=0))[0]
-        plt.title(f'True vs predicted electron arrival times for Δμ={dmu} pulse')
-        plt.plot(at, marker='+', label='True electron arrival times')
-        plt.plot(at_hat, marker='o', label='Predicted electron arrival times')
-        plt.ylabel('Arrival time (samples, 10ns)')
-        plt.xlabel('Electron number')
-        plt.legend()
-        plt.show()
-
-        continue
-        
-        at_hist, _ = np.histogram(at, bins=np.arange(0, 700, 1))
-        at_hat_hist, _ = np.histogram(at_hat, bins=np.arange(0, 700, 1))
-        plot_at_hists(at_hist, label='True arrival times')
-        plot_at_hists(at_hat_hist, label='Predicted arrival times')
-        plt.title('True vs predicted histogram of electron arrival times')
-        plt.xlabel('Arrival time (samples, 10ns)')
-        plt.ylabel('Number of electrons')
-        plt.legend()
-        plt.show()
-
-    '''
-
-    # compare_latent_dim_compression([1, 2, 4, 8, 16, 32, 64, 128, 256], X_train, Y_train, X_test, Y_test)
-
-
-    # tuner = keras_tuner.RandomSearch(tuner_model, objective='val_loss', max_trials=100)
-    # tuner.search(np.squeeze(X_train), Y_train, epochs=35, batch_size=128, validation_data=(np.squeeze(X_test), Y_test))
-
-    # fig = plot_parameter_performance(['untitled_project/', '../untitled_project_2/', '../untitled_project_4/'], title='Number of Parameters vs. Training Performance [val MAE] [3/9/24]')
-
-    # save_interactive_plot(fig)
-    # load_interactive_plot()
-
-def channel_classification():
-    num_samples = 1000
-    num_channels = 100
-
-    data = np.array([create_simulated_pulses(num_channels, 700) for _ in range(num_samples)])
-    example_labels = np.zeros((num_samples,))
-    spatial_data, temporal_data = PODMLP.POD(data)
-
-    train_data, test_data, train_labels, test_lables = train_test_split([data, example_labels])
-
-    sample_adjacency_matrix = create_sample_adjacency_matrix(num_channels, connectivity=6)
-
-    print(sample_adjacency_matrix)
-
-    test_gnn = BaselineGNN(num_channels=num_channels)
-
+    channel_photon_test(
+        num_samples = num_samples,
+        XC          = XC,
+        PXC         = PXC,
+        XC_FLAT     = XC_FLAT,
+        PXC_FLAT    = PXC_FLAT,
+        window_size = 9
+        )
 
 def main():
     regression()
