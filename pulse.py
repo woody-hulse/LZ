@@ -6,21 +6,21 @@ import time
 
 from preprocessing import *
 
-# Parameters (in ns)
-DIFFWIDTH       = 300
+# Parameters
+DIFFWIDTH       = 300   # ns
 G2              = 47.35
-EGASWIDTH       = 450
-PHDWIDTH        = 20
-SAMPLERATE      = 10
+EGASWIDTH       = 10   # EGASWIDTH       = 450   # ns
+PHDWIDTH        = 20    # ns
+SAMPLERATE      = 10    # ns
 NUM_ELECTRONS   = 148
 
 def gaussian(x, C, mu, sigma):
     return C*np.exp(-(x-mu)**2/(2*sigma**2))
 
 def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=NUM_ELECTRONS // 2):
-    summed_pulse = np.zeros(size, dtype=np.float16)
-    pulse = np.zeros((num_rows, num_cols, size), dtype=np.float16)
-    photon_pulse = np.zeros((num_rows, num_cols, size), dtype=np.int8)
+    summed_pulse    = np.zeros(size, dtype=np.float16)
+    pulse           = np.zeros((num_rows, num_cols, size), dtype=np.float16)
+    photon_pulse    = np.zeros((num_rows, num_cols, size), dtype=np.int8)
 
     photon_interval_width = PHDWIDTH // SAMPLERATE * 3
     photon_interval = np.array([i for i in range(-photon_interval_width, photon_interval_width + 1)])
@@ -28,13 +28,12 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=N
 
     electron_arrival_times = np.random.normal(mu, DIFFWIDTH / SAMPLERATE, size=num_electrons)
     num_photons = np.random.poisson(G2, size=num_electrons)
-    # num_photons = np.ones(num_electrons, dtype=np.int32)
-    r = np.random.normal(num_cols / 2, num_cols / 8, size=num_electrons)
-    c = np.random.normal(num_rows / 2, num_rows / 8, size=num_electrons)
+    r = np.random.normal(num_cols / 2, num_cols / 8, size=num_electrons) # Row of electron centers
+    c = np.random.normal(num_rows / 2, num_rows / 8, size=num_electrons) # Column of electron centers
     for e in range(num_electrons):
-        pr = np.random.normal(r[e], num_cols / 8, size=num_photons[e])
-        pc = np.random.normal(c[e], num_cols / 8, size=num_photons[e])
-        photon_arrival_times = np.random.normal(electron_arrival_times[e], EGASWIDTH / SAMPLERATE, num_photons[e])
+        pr = np.random.normal(r[e], num_cols / 32, size=num_photons[e]) # Row of photon centers
+        pc = np.random.normal(c[e], num_cols / 32, size=num_photons[e]) # Column of photon centers
+        photon_arrival_times = np.random.normal(electron_arrival_times[e], EGASWIDTH / SAMPLERATE, num_photons[e]) # Arrival times of photons
         for p in range(num_photons[e]):
             # Not considering multiple photoelectron emission
             num_photoelectrons = np.abs(np.random.normal(1, 0.4))
@@ -42,16 +41,14 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=N
             photon_index = int(photon_arrival_times[p])
             photon_indices = photon_index + photon_interval
             valid_indices = (photon_indices >= 0) & (photon_indices < size)
-            photon_emmission = gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width) * num_photoelectrons
-            summed_pulse[photon_indices[valid_indices]] += photon_emmission
+            photon_emission = gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width) * num_photoelectrons # Binned photon emission
+
+            summed_pulse[photon_indices[valid_indices]] += photon_emission
             pri, pci = min(num_cols - 1, max(0, int(pr[p]))), min(num_rows - 1, max(0, int(pc[p])))
-            pulse[pri][pci][photon_indices[valid_indices]] += photon_emmission
+            pulse[pri][pci][photon_indices[valid_indices]] += photon_emission
             photon_pulse[pri][pci][photon_index] += 1
-            # pulse[r][c][photon_index] = 1
 
-    # electron_arrival_times.sort()
-
-    return summed_pulse, pulse, photon_pulse, electron_arrival_times
+    return summed_pulse, pulse, photon_pulse, np.column_stack([r, c, electron_arrival_times])
 
 def generate_pulse(mu=350, size=700, num_electrons=NUM_ELECTRONS // 2):
     summed_pulse = np.zeros(size)
@@ -253,7 +250,7 @@ def save_pulse_dataset(summed_pulses, pulses, photon_pulses, delta_mu, electron_
     num_pulses = pulses.shape[0]
     e = '{:.1e}'.format(num_pulses)
     weat = '_withEAT' if arrival_times else ''
-    fname = f'../dSSdMS/dSS_2400501_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered.npz'
+    fname = f'../dSSdMS/dSS_2400914_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered.npz'
     np.savez_compressed(
         file=fname,
         events=summed_pulses,
@@ -281,24 +278,29 @@ def at_to_hist(at):
     at_hist = []
     debug_print(['generating arrival time histograms'])
     for times in tqdm(at):
-        hist, bins = np.histogram(times, bins=np.arange(0, 700, 1))
+        hist, bins = np.histogram(times, bins=np.arange(0, 701, 1))
         at_hist.append(hist)
     at_hist = np.array(at_hist)
 
     return at_hist
 
-def plot_at_hists(hist, label):
+def plot_at_hist(hist, label):
     plt.fill_between(range(len(hist)), hist, alpha=0.3)
     plt.plot(hist, label=label)    
 
 
 
 def main():
-    generate_pulse_dataset_multiproc(50000, bins=20, max_delta_mu=0, arrival_times=True, save=True,
+    summed_pulses, pulses, delta_mu, electron_arrival_times = generate_pulse_dataset_multiproc(int(1e5), bins=20, max_delta_mu=0, arrival_times=True, save=True,
                                      
                                      task = channel_pulse_task
                                      
                                      )
+
+    debug_print(['Generated summed pulses dataset with shape            :', summed_pulses.shape])
+    debug_print(['Generated pulses dataset with shape                   :', pulses.shape])
+    debug_print(['Generated delta mu dataset with shape                 :', delta_mu.shape])
+    debug_print(['Generated electron arrival times dataset with shape   :', electron_arrival_times.shape])
 
 if __name__ == '__main__':
     main()

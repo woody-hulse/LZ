@@ -1,3 +1,21 @@
+import pandas as pd
+import numpy as np
+from tqdm import tqdm
+from collections import Counter
+import sys
+import copy
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import normalize
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_curve
+from scipy.stats import norm
+import matplotlib.cm as cm
+
 from main import *
 sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
 sns.color_palette('hls', 8)
@@ -623,15 +641,21 @@ Compare accuracy/data representations for different autoencoder sizes
 '''
 def compare_latent_dim_compression(latent_sizes, X_train, Y_train, X_test, Y_test):
     for latent_size in latent_sizes:
-        autoencoder = Autoencoder(input_size=700, encoder_layer_sizes=[512, latent_size])
+        autoencoder = Autoencoder(input_size=700, encoder_layer_sizes=[512, 128, latent_size], decoder_layer_sizes=[128, 700])
 
-        train(autoencoder, X_train, X_train, epochs=100, batch_size=256)
+        train(autoencoder, X_train, X_train, epochs=200, batch_size=256)
 
         for x in X_test[:2]:
+            plt.figure(figsize=(6, 5))
             plt.plot(x, label='Original Pulse')
             plt.plot(autoencoder(np.array([x]))[0], label='Reconstructed Pulse')
-            plt.title('Pulse reconstruction: ' + autoencoder.name)
+            # plt.title('Pulse reconstruction: ' + autoencoder.name)
+            plt.xlabel('Sample [10 ns]')
+            plt.ylabel('Signal amplitude [phd/10 ns]')
             plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig('autoencoder_reconstruction_high_res.png', dpi=300)
             plt.show()
 
         encoded_X_train = autoencoder.encode(X_train)
@@ -1076,21 +1100,246 @@ def delta_test(num_samples, XC, PXC, XC_FLAT, PXC_FLAT, window_size, deltas=(1, 
         plt.close()
 
 
+def channel_photon_size_test(num_samples, XC, PXC, XC_FLAT, PXC_FLAT, window_size, delta=1.35):
+
+    sample_indices = np.array([i for i in range(num_samples)])
+    np.random.shuffle(sample_indices)
+    X_chunks, Y_chunks = get_windowed_data(XC_FLAT[:num_samples + window_size], PXC_FLAT[:num_samples + window_size], window_size)
+
+    photon_model = BaselinePhotonModel(input_size=window_size, layer_sizes=[32, 32, 1], max=4, delta=delta)
+    train(photon_model, X_chunks[sample_indices], Y_chunks[sample_indices], epochs=100, batch_size=512)
+    y_hat = photon_model(X_chunks[:100000])
+    y = Y_chunks[:100000]
+    plot_mse_histogram(y, y_hat, title=f'window={window_size} model MSE for each photon count [5-03-24]', save_path=f'{window_size}_gram_pe_smse')
+
+    num_tests = 1000
+    diffs = np.empty((num_tests, 700 - window_size))
+    uncompressed_bits, compressed_bits = 0, 0
+    for i in tqdm(range(num_tests)):
+        x, y = np.transpose(np.reshape(XC[i], (16*16, 700))), np.transpose(np.reshape(PXC[i], (16*16, 700)))
+        y_ = np.empty_like(y[window_size//2:-window_size//2], dtype=np.float32)
+        for c in range(16*16):
+            x_chunks, y_chunks = get_windowed_data(x[:, c], y[:, c], window_size)
+            y_[:, c] = photon_model(x_chunks)[:, 0]
+        y = y[window_size//2:-window_size//2]
+        diffs[i] = np.sum(y - np.round(y_, decimals=0), axis=1)
+
+        uncompressed_bits += np.sum(x > 1e-6) * 14
+        compressed_bits += np.sum(y_ > 1e-6) * 2
+
+    
+    error = np.mean(np.abs(diffs))
+    debug_print_(f'Mean error: {error : .4f} photons per pulse')
+    debug_print_(f'Compression ratio: {uncompressed_bits / compressed_bits : .4f}')
+    
+
+
 def channel_photon_test(num_samples, XC, PXC, XC_FLAT, PXC_FLAT, window_size):
     X_chunks, Y_chunks = get_windowed_data(XC_FLAT[:num_samples + window_size], PXC_FLAT[:num_samples + window_size], window_size)
 
     sample_indices = np.array([i for i in range(num_samples)])
     np.random.shuffle(sample_indices)
     photon_model = BaselinePhotonModel(input_size=window_size, layer_sizes=[32, 32, 1], max=4, delta=1.3)
-    train(photon_model, X_chunks[sample_indices], Y_chunks[sample_indices], epochs=50, batch_size=512)
+    train(photon_model, X_chunks[sample_indices], Y_chunks[sample_indices], epochs=0, batch_size=512)
     y_hat = photon_model(X_chunks[:100000])
     y = Y_chunks[:100000]
 
-    num_tests = 100000
-    diffs = np.empty((num_tests, 700 - window_size))
+    num_tests = 10000
+    errors = np.empty((num_tests, 16, 16, 700 - window_size))
+    photon_counts = np.zeros((num_tests, 16, 16))
     for test in tqdm(range(num_tests)):
-        x_event, y_event = np.reshape(XC[test], (-1, 700)), np.reshape(PXC_FLAT[test], (700,))
-        x_event_chunks, y_event_chunks = get_windowed_data(x_event, y_event, window_size)
-        y_ = photon_model(x_event_chunks)[:, 0]
-        y = y[window_size//2:-window_size//2]
-        diffs[test] = y - np.round(y_, decimals=0)
+        for i in range(16):
+            for j in range(16):
+                x_event, y_event = np.reshape(XC[test][i][j], (-1, 700)), np.reshape(PXC[test][i][j], (700,))
+                photon_counts[test, i, j] = np.sum(y_event)
+                print(photon_counts[test])
+                x_event_chunks, y_event_chunks = get_windowed_data(x_event, y_event, window_size)
+                print(x_event_chunks.shape, x_event_chunks)
+                y_ = photon_model(x_event_chunks)[:, 0]
+                y = y[window_size//2:-window_size//2]
+                errors[test, i, j] = y - np.round(y_, decimals=0)
+    
+    max_count = int(max(photon_counts))
+    photon_count_mean_errors = np.zeros(max_count)
+    for test in range(num_tests):
+        photon_count = photon_counts[test]
+        photon_count_mean_errors[photon_count] += np.mean(errors[test])
+
+    photon_count_mean_errors /= np.bincount(photon_counts)
+    plt.plot(photon_count_mean_errors)
+    plt.xlabel('Photon count')
+    plt.ylabel('Mean error')
+    plt.title('Mean error of channel photon model in 100k SS pulses')
+    plt.show()
+    
+
+def plot_hit_pattern(XC, filename='hit_pattern'):
+    dprint('plotting hit pattern')
+    image_frames = []
+    imgs = np.transpose(XC[:10], axes=[0, 3, 1, 2])
+    for t in tqdm(imgs[0]):
+        plt.imshow(t)
+        plt.title('Hit pattern')
+        
+        plt.gcf().canvas.draw()
+        width, height = plt.gcf().get_size_inches() * plt.gcf().dpi
+        data = np.frombuffer(plt.gcf().canvas.tostring_rgb(), dtype=np.uint8)
+        image_array = data.reshape(int(height), int(width), 3)
+
+        image_frame = Image.fromarray(image_array)
+        image_frames.append(image_frame)
+
+    image_frames[0].save(filename + '.gif', 
+                        save_all = True, 
+                        duration = 20,
+                        loop = 0,
+                        append_images = image_frames[1:])
+
+
+def graph_electron_arrival_prediction(XC, AT, epochs=100):
+
+    AT_hist = at_to_hist(AT)
+
+    graph_adjacency_matrix = create_grid_adjacency(XC.shape[1])
+    XC_in = XC.reshape(XC.shape[0], -1, 700)
+    
+    graph_model = GraphElectronModel(
+        adjacency_matrix    = graph_adjacency_matrix,
+        graph_layer_sizes   = [512, 256, 128, 64, 32, 16, 8, 4], 
+        layer_sizes         = [512, 700],
+        loss                = ScaledMeanSquaredError(delta=1.3)
+    )
+
+    train(graph_model, XC_in, AT_hist, epochs=epochs, batch_size=128, plot_history=True)
+
+    for i in range(30):
+        plot_at_hist(AT_hist[i], label='True electron arrivals')
+        at_hist_hat = graph_model(np.expand_dims(XC_in[i], axis=0))[0]
+        plot_at_hist(at_hist_hat, label='Predicted electron arrivals')
+        plt.legend()
+        plt.show()
+
+
+def graph_channel_electron_arrival_prediction(XC, CAT, epochs=100):
+    graph_adjacency_matrix = create_grid_adjacency(XC.shape[1])
+    XC_in = XC.reshape(XC.shape[0], -1, 700)
+
+    graph_model = GraphElectronModel(
+        adjacency_matrix    = graph_adjacency_matrix,
+        graph_layer_sizes   = [700, 700, 700, 700], 
+        layer_sizes         = None
+    )
+
+    graph_model = load_model('graph_channel_model')
+    graph_model.build((None, 256, 700))
+    graph_model.compile(loss=MeanSquaredWassersteinLoss2D(), optimizer=tf.keras.optimizers.Adam(learning_rate=4e-5))
+
+    ATX, ATY, AT = CAT[:, :, 0], CAT[:, :, 1], CAT[:, :, 2]
+    at_channel_hist = np.zeros((CAT.shape[0], 16, 16, 700))
+
+    dprint('Creating arrival time channel histogram')
+    for i, (xs, ys, ats) in tqdm(enumerate(zip(ATX, ATY, AT))):
+        for x, y, at in zip(xs, ys, ats):
+            x, y, at = np.clip(x, 0, 15), np.clip(y, 0, 15), np.clip(at, 0, 699)
+            r, c, t = round(x), round(y), round(at)
+            at_channel_hist[i, r, c, t] += 1
+    at_channel_hist = at_channel_hist.reshape(at_channel_hist.shape[0], -1, 700)
+
+    train(graph_model, XC_in, at_channel_hist, epochs=epochs, batch_size=128, plot_history=True)
+
+    # save_model(graph_model, 'graph_channel_model')
+
+    for i in range(5):
+        y = np.array(at_channel_hist[i], dtype=np.float32)
+        y = np.reshape(y, (1, 16, 16, 700))
+        y_cumsum = np.cumsum(y, axis=3)
+        y_cumsum_x = tf.cumsum(y_cumsum, axis=1)
+        y_cumsum_xy = tf.cumsum(y_cumsum_x, axis=2)[0]
+
+        y_hat = np.array(graph_model(np.expand_dims(XC_in[i], axis=0)), dtype=np.float32)
+        y_hat = np.reshape(y_hat, (1, 16, 16, 700))
+        y_hat_cumsum = np.cumsum(y_hat, axis=3)
+        y_hat_cumsum_x = tf.cumsum(y_hat_cumsum, axis=1)
+        y_hat_cumsum_xy = tf.cumsum(y_hat_cumsum_x, axis=2)[0]
+
+        loss = np.mean(np.abs(y_cumsum_xy - y_hat_cumsum_xy))
+
+        concat_y_yhat = np.concatenate((y_cumsum_xy, y_hat_cumsum_xy), axis=0)
+
+        plt.title(f'Loss: {loss : .4f}')
+        plt.imshow(concat_y_yhat[:, :, -1])
+        plt.colorbar()
+        plt.show()
+
+    for i in range(5):
+        at_channel_hist_i = np.array(at_channel_hist[i], dtype=np.float32)
+        at_channel_hist_hat_i = np.array(graph_model(np.expand_dims(XC_in[i], axis=0))[0], dtype=np.float32)
+
+        y = tf.reshape(at_channel_hist_i, (16, 16, 700))
+        y_hat = tf.reshape(at_channel_hist_hat_i, (16, 16, 700))
+
+        y_cumsum = tf.cumsum(y, axis=2)
+        y_cumsum_x = tf.cumsum(y_cumsum, axis=0)
+        y_cumsum_xy = tf.cumsum(y_cumsum_x, axis=1)
+
+        y_hat_cumsum = tf.cumsum(y_hat, axis=2)
+        y_hat_cumsum_x = tf.cumsum(y_hat_cumsum, axis=0)
+        y_hat_cumsum_xy = tf.cumsum(y_hat_cumsum_x, axis=1)
+
+        y_cumsum_sum = tf.reduce_sum(y_cumsum, axis=[0, 1])
+        y_hat_cumsum_sum = tf.reduce_sum(y_hat_cumsum, axis=[0, 1])
+
+        channel_mse = tf.reduce_mean(tf.square(y_cumsum_xy - y_hat_cumsum_xy))
+        sum_mse = tf.reduce_mean(tf.square(y_cumsum_sum - y_hat_cumsum_sum))
+
+        dprint(f'Channel MSE: {channel_mse : .4f}, Sum MSE: {sum_mse : .4f}')
+
+        for j in np.random.permutation(256)[:20]:
+            at_channel_j_hist_i = np.cumsum(at_channel_hist_i[j])
+            at_channel_j_hist_hat_i = np.cumsum(at_channel_hist_hat_i[j])
+
+            plt.title(f'Channel {j} liquid electron arrival time histogram')
+            plot_at_hist(at_channel_j_hist_i, label=f'True electron arrivals')
+            plot_at_hist(at_channel_j_hist_hat_i, label=f'Predicted electron arrivals')
+            plt.ylim(0, 4)
+            plt.legend()
+            plt.show()
+
+
+    for i in range(30):
+        at_hist = np.sum(at_channel_hist[i], axis=0)
+        plot_at_hist(at_hist, label='True electron arrivals')
+        at_channel_hist_hat = graph_model(np.expand_dims(XC_in[i], axis=0))[0]
+        at_hist_hat = np.sum(at_channel_hist_hat, axis=0)
+        plot_at_hist(at_hist_hat, label='Predicted electron arrivals')
+        plt.legend()
+        plt.show()
+
+        plot_at_hist(np.cumsum(at_hist), label='True electron arrivals (CDF)')
+        plot_at_hist(np.cumsum(at_hist_hat), label='Predicted electron arrivals (CDF)')
+        plt.legend()
+        plt.show()
+
+
+
+def test_graph_network():
+    graph_adjacency_matrix = create_grid_adjacency(16)
+    graph_model = GraphElectronModel(
+        adjacency_matrix    = graph_adjacency_matrix,
+        graph_layer_sizes   = [512, 256, 128, 64, 32, 16, 8], 
+        layer_sizes         = [512, 700],
+        loss                = tf.keras.losses.MeanSquaredError()
+    )
+
+    X = np.zeros((1, 16, 16, 700))
+    X[0][3][12] = np.ones(700) * 100
+    X[0][10][9] = np.ones(700) * 30
+    X = X.reshape(X.shape[0], -1, 700)
+
+    iterations = graph_model.debug_call(X)
+
+    for iteration in iterations:
+        iteration = np.sum(iteration, axis=2)
+        iteration = iteration.reshape((16, 16))
+        plt.imshow(iteration)
+        plt.show()

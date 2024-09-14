@@ -1,7 +1,11 @@
 import tensorflow as tf
+import spektral
 # import keras_tuner
 import numpy as np
 from vgg import *
+
+from scipy.stats import wasserstein_distance
+from matplotlib import pyplot as plt
 
 
 # VGG16-based 1D convolutional neural network
@@ -129,19 +133,6 @@ class MLPChannelModel(tf.keras.Model):
         
         return x
 
-
-class ScaledMeanSquaredError(tf.keras.losses.Loss):
-    def __init__(self, delta=2.0):
-        super().__init__()
-        self.delta = tf.cast(delta, tf.float32)
-    
-    def call(self, y, y_hat):
-        scale = tf.pow(self.delta, tf.cast(y, tf.float32))
-        squared_error = tf.pow(tf.abs(y - y_hat), self.delta)
-        scaled_mean_square_error = tf.reduce_mean(scale * squared_error)
-        return scaled_mean_square_error
-    
-
 class ChannelScaledMeanSquaredError(tf.keras.losses.Loss):
     def __init__(self, delta=2.0):
         super().__init__()
@@ -157,6 +148,18 @@ class ChannelScaledMeanSquaredError(tf.keras.losses.Loss):
         mean_squared_error = tf.reduce_sum(tf.square(y_sum - y_hat_sum))
 
         return scaled_mean_square_error + mean_squared_error
+
+
+class ScaledMeanSquaredError(tf.keras.losses.Loss):
+    def __init__(self, delta=2.0):
+        super().__init__()
+        self.delta = tf.cast(delta, tf.float32)
+    
+    def call(self, y, y_hat):
+        scale = tf.pow(self.delta, tf.cast(y, tf.float32))
+        squared_error = tf.pow(tf.abs(y - y_hat), self.delta)
+        scaled_mean_square_error = tf.reduce_mean(scale * squared_error)
+        return scaled_mean_square_error
 
 
 class BaselinePhotonModel(tf.keras.Model):
@@ -189,6 +192,122 @@ class BaselinePhotonModel(tf.keras.Model):
         super().build(input_shape)
         self.rescale_layer.build(input_shape)
         self.built = True
+
+
+class MeanSquaredWassersteinLoss(tf.keras.losses.Loss):
+    def __init__(self):
+        super().__init__()
+    
+    def call(self, y, y_hat):
+        y_cumsum = tf.cumsum(y, axis=2)
+        y_hat_cumsum = tf.cumsum(y_hat, axis=2)
+        return tf.math.reduce_mean((y_cumsum - y_hat_cumsum) ** 2)
+
+class MeanSquaredWassersteinLoss2D(tf.keras.losses.Loss):
+    def __init__(self, rows=16, cols=16, features=700):
+        super().__init__()
+        self.rows = rows
+        self.cols = cols
+        self.features = features
+    
+    def call(self, y, y_hat):
+        y       = tf.reshape(y,     (-1, self.rows, self.cols, self.features))
+        y_hat   = tf.reshape(y_hat, (-1, self.rows, self.cols, self.features))
+
+        y_cumsum = tf.cumsum(y, axis=3)
+        y_cumsum_x = tf.cumsum(y_cumsum, axis=1)
+        y_cumsum_xy = tf.cumsum(y_cumsum_x, axis=2)
+
+        y_hat_cumsum = tf.cumsum(y_hat, axis=3)
+        y_hat_cumsum_x = tf.cumsum(y_hat_cumsum, axis=1)
+        y_hat_cumsum_xy = tf.cumsum(y_hat_cumsum_x, axis=2)
+
+        y_cumsum_sum = tf.reduce_sum(y_cumsum, axis=[1, 2])
+        y_hat_cumsum_sum = tf.reduce_sum(y_hat_cumsum, axis=[1, 2])
+
+        channel_mse = tf.math.reduce_mean(tf.square(y_cumsum_xy - y_hat_cumsum_xy))
+        sum_mse = tf.math.reduce_mean(tf.square(y_cumsum_sum - y_hat_cumsum_sum))
+
+        return channel_mse + sum_mse
+
+    def get_config(self):
+        return {
+            'rows': self.rows,
+            'cols': self.cols,
+            'features': self.features
+        }
+
+class ElectronProbabilityLoss(tf.keras.losses.Loss):
+    DIFFWIDTH       = 300   # ns
+    G2              = 47.35
+    EGASWIDTH       = 450   # ns
+    PHDWIDTH        = 20    # ns
+    SAMPLERATE      = 10    # ns
+    NUM_ELECTRONS   = 148
+
+    def __init__(self):
+        super().__init__()
+    
+    def call(self, generated_electron_hits, photon_hits):
+        return np.random.random(size=generated_electron_hits.shape[0])
+
+
+class GraphElectronModel(tf.keras.Model):
+    def __init__(self, adjacency_matrix, graph_layer_sizes=[1], layer_sizes=None, loss=None, **kwargs):
+        super(GraphElectronModel, self).__init__(**kwargs)
+        
+        if type(adjacency_matrix) == dict: # for deserialization
+            adjacency_matrix = np.array(adjacency_matrix['config']['value'])
+        self.adjacency_matrix = adjacency_matrix
+        self.graph_layer_sizes = graph_layer_sizes
+        self.layer_sizes = layer_sizes
+        self.A = spektral.utils.convolution.gcn_filter(adjacency_matrix)
+
+        self.dense_tail = layer_sizes is not None
+
+        self.graph_layers = [spektral.layers.GCNConv(size, activation='selu', attn_heads=3) for size in graph_layer_sizes[:-1]] 
+        self.rescale_layer = tf.keras.layers.Rescaling(1, offset=-1e-4)
+
+        self.flatten_layer = None
+        self.dense_layers = None
+        if self.dense_tail:
+            self.graph_layers.append(spektral.layers.GCNConv(graph_layer_sizes[-1], activation='selu'))
+            self.flatten_layer = tf.keras.layers.Flatten()
+            self.dense_layers = [tf.keras.layers.Dense(size, activation='selu') for size in layer_sizes[:-1]]
+            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
+        else:
+            self.graph_layers.append(spektral.layers.GCNConv(graph_layer_sizes[-1], activation='sigmoid'))
+
+    def call(self, x):
+        for graph_layer in self.graph_layers:
+            x = graph_layer([x, self.A])
+
+        if self.dense_tail:
+            x = self.flatten_layer(x)
+            for layer in self.dense_layers:
+                x = layer(x)
+        else:
+            x = self.rescale_layer(x)
+        return x
+
+    def debug_call(self, x):
+        intermediate = [x]
+        for graph_layer in self.graph_layers:
+            x = graph_layer([x, self.A])
+            intermediate.append(x)
+
+        return intermediate
+
+    def get_config(self):
+        config = super(GraphElectronModel, self).get_config()
+        config.update({
+            'adjacency_matrix': self.adjacency_matrix,
+            'graph_layer_sizes': self.graph_layer_sizes,
+            'layer_sizes': self.layer_sizes
+        })
+        return config
+
+
     
 class BaselinePhotonClassifier(tf.keras.Model):
     def __init__(self, input_size=None, layer_sizes=[1], name='baseline_photon_classifier_'):
@@ -337,8 +456,7 @@ def tuner_model(hp):
     model.compile(loss='mae')
     return model
     
-'''
-def tuner_model(hp):
+def tuner_model_2(hp):
     model = tf.keras.Sequential()
     model.add(tf.keras.layers.Dense(hp.Choice('units1', [700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
     if hp.Boolean('layer2'):
@@ -350,7 +468,7 @@ def tuner_model(hp):
     model.add(tf.keras.layers.Dense(1, activation='linear'))
     model.compile(loss='mae')
     return model
-'''
+
 
 class MLPModel(tf.keras.Model):
     def __init__(self, input_size=None, output_size=1, classification=False, name='mlp_model'):
@@ -485,7 +603,7 @@ class ConvAttentionModel(tf.keras.Model):
         super().__init__(name=name)
 
         self.block1 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
             tf.keras.layers.Activation('relu'),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.MaxPool1D(pool_size=2),
@@ -493,7 +611,7 @@ class ConvAttentionModel(tf.keras.Model):
         ]
 
         self.block2 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
             tf.keras.layers.Activation('relu'),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.MaxPool1D(pool_size=2),
@@ -501,14 +619,14 @@ class ConvAttentionModel(tf.keras.Model):
         ]
 
         self.block3 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
             tf.keras.layers.Activation('relu'),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Attention()
         ]
 
         self.block4 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
             tf.keras.layers.Activation('relu'),
             tf.keras.layers.BatchNormalization()
         ]
@@ -555,27 +673,27 @@ class ConvNoAttentionModel(tf.keras.Model):
         super().__init__(name=name)
 
         self.block1 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
             tf.keras.layers.Activation('relu'),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.MaxPool1D(pool_size=2)
         ]
 
         self.block2 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
             tf.keras.layers.Activation('relu'),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.MaxPool1D(pool_size=2)
         ]
 
         self.block3 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
             tf.keras.layers.Activation('relu'),
             tf.keras.layers.BatchNormalization()
         ]
 
         self.block4 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer="he_normal"),
+            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
             tf.keras.layers.Activation('relu'),
             tf.keras.layers.BatchNormalization()
         ]
@@ -636,7 +754,7 @@ class BaselineModel(tf.keras.Model):
         model.add(tf.keras.layers.Dense(1000, kernel_initializer = initializer, activation='relu'))
         model.add(tf.keras.layers.Dense(1, activation='linear'))
         optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-        model.compile(loss="mean_absolute_error", optimizer=optimizer)#, metrics=[tf.keras.metrics.RootMeanSquaredError()])
+        model.compile(loss='mean_absolute_error', optimizer=optimizer)#, metrics=[tf.keras.metrics.RootMeanSquaredError()])
         model.build((1,) + input_shape)
         return model
     
@@ -661,9 +779,9 @@ class BaselineConvModel(tf.keras.Model):
         for layer in range(n_hidden):
             model.add(tf.keras.layers.Dense(n_neurons, activation=activation))
 
-        model.add(tf.keras.layers.Dense(1, activation="linear"))
+        model.add(tf.keras.layers.Dense(1, activation='linear'))
         optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
-        model.compile(loss="mean_absolute_error", optimizer=optimizer)
+        model.compile(loss='mean_absolute_error', optimizer=optimizer)
 
         return model
     

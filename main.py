@@ -48,10 +48,9 @@ DMS_AT_CHANNEL_FILE = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafra
 # MS events with channel-level resolution
 DMS_CHANNEL_FILE = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
 # SS events with associated (binned) photon arrivals
-DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400501_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz'
-
-# Default save directory for stored models
-MODEL_SAVE_PATH_FILE = 'saved_models/'
+# DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400501_gaussgass_700samplearea7000_areafrac0o5_1.0e+04events_random_centered.npz'
+# DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400913_gaussgass_700samplearea7000_areafrac0o5_1.0e+04events_random_centered.npz'
+DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400914_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered.npz'
 
 '''
 Training function for tensorflow model
@@ -69,7 +68,7 @@ Training function for tensorflow model
 
     return          : Model training history (metrics + losses)
 '''
-def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2, compile=False, summary=False, callbacks=False, learning_rate=0.001, metrics=[]):
+def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2, compile=False, summary=False, callbacks=False, learning_rate=0.001, metrics=[], plot_history=False):
     debug_print(['training', model.name])
 
     if compile:
@@ -94,6 +93,15 @@ def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2
         verbose=1,
         callbacks=c
         )
+    
+    if plot_history:
+        # plt.plot(history.history['loss'], label='Loss')
+        plt.plot(history.history['val_loss'], label='Validation loss')
+        plt.title('Model loss')
+        plt.ylabel('Loss')
+        plt.xlabel('Epoch')
+        plt.legend()
+        plt.show()
     
     return history
 
@@ -131,52 +139,26 @@ def regression():
 
     debug_print(['preprocessing data'])
 
-    X = np.array([None for _ in range(int(1e6))])
-    Y = np.array([None for _ in range(int(1e6))])
-    XC = np.array([None for _ in range(int(1e6))])
-    PXC = np.array([None for _ in range(int(1e6))])
-    areafrac = np.array([None for _ in range(int(1e6))])
-    AT = np.array([None for _ in range(int(1e6))])
+    X     = np.array([None for _ in range(int(1e6))]) # pulse
+    Y     = np.array([None for _ in range(int(1e6))]) # delta mu
+    XC    = np.array([None for _ in range(int(1e6))]) # pulse (channel-level)
+    PXC   = np.array([None for _ in range(int(1e6))]) # discrete photon arrival (channel-level)
+    AF    = np.array([None for _ in range(int(1e6))]) # area fraction
+    AT    = np.array([None for _ in range(int(1e6))]) # arrival time
 
     X, XC, PXC, Y, AT = load_pulse_dataset(DSS_CHANNEL_PHOTON_FILE)
 
     # X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
-    X_XC_PXC_Y_AT_train, X_XC_PXC_Y_AT_test = train_test_split_all([X, XC, PXC, Y, AT], test_size=0.2)
-
-    ''' Plot hit patterns of simulated channel-level events
-    image_frames = []
-    imgs = np.transpose(XC[:10], axes=[0, 3, 1, 2])
-    for t in imgs[0]:
-        plt.imshow(t)
-        plt.title('Hit pattern')
-        
-        plt.gcf().canvas.draw()
-        width, height = plt.gcf().get_size_inches() * plt.gcf().dpi
-        data = np.frombuffer(plt.gcf().canvas.tostring_rgb(), dtype=np.uint8)
-        image_array = data.reshape(int(height), int(width), 3)
-
-        image_frame = Image.fromarray(image_array)
-        image_frames.append(image_frame)
-
-    image_frames[0].save('hit_pattern' + '.gif', 
-                        save_all = True, 
-                        duration = 20,
-                        loop = 0,
-                        append_images = image_frames[1:])
-    '''
+    # X_XC_PXC_Y_AT_train, X_XC_PXC_Y_AT_test = train_test_split_all([X, XC, PXC, Y, AT], test_size=0.2)
     
-
-    # X, Y, _ = concat_data(DMS_NAMES)
-    # X, Y = shift_distribution(X, Y)
-    # plot_distribution(Y)
     event_indices = np.array([i for i in range(min(X.shape[0], num_events))])
     np.random.shuffle(event_indices)
-    X = X[event_indices][:num_events]               # Summed pulse signal
-    XC = XC[event_indices][:num_events]             # Channel pulse signal
-    PXC = PXC[event_indices][:num_events]           # Photon count channel pulse signal
-    Y = Y[event_indices][:num_events]               # Delta mu for MS, 0 for SS
-    AT = AT[event_indices][:num_events]             # Electron arrival tiimes
-    areafrac = areafrac[event_indices][:num_events] # Area fraction of MS pulse
+    X       = X[event_indices][:num_events]     # Summed pulse signal
+    XC      = XC[event_indices][:num_events]    # Channel pulse signal
+    PXC     = PXC[event_indices][:num_events]   # Photon count channel pulse signal
+    Y       = Y[event_indices][:num_events]     # Delta mu for MS, 0 for SS
+    AT      = AT[event_indices][:num_events]    # Electron arrival tiimes
+    AF      = AF[event_indices][:num_events]    # Area fraction of MS pulse
 
     num_samples = 1000000
     sample_indices = np.array([i for i in range(num_samples)])
@@ -189,15 +171,12 @@ def regression():
     '''
     Experiments
     '''
+    # plot_hit_pattern(XC)
+    # graph_electron_arrival_prediction(XC, AT[:, :, -1], epochs=50)
+    graph_channel_electron_arrival_prediction(XC, AT, epochs=25)
 
-    channel_photon_test(
-        num_samples = num_samples,
-        XC          = XC,
-        PXC         = PXC,
-        XC_FLAT     = XC_FLAT,
-        PXC_FLAT    = PXC_FLAT,
-        window_size = 9
-        )
+    # test_graph_network()
+    
 
 def main():
     regression()

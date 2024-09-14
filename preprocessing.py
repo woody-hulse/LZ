@@ -14,6 +14,9 @@ import os
 import datetime
 import json
 
+# Default save directory for stored models
+MODEL_SAVE_PATH = 'saved_models/'
+
 '''
 Data structure for hosting DS data and associated UL values
     self.DSdata     : Pulse height in phd (photons detected)
@@ -46,6 +49,19 @@ def debug_print(statements=[], end='\n'):
         print(statement, end=' ')
     print(end=end)
 
+def dprint(statement, end='\n', color='end'):
+    color = color.lower()
+    ct = datetime.datetime.now()
+    color_code = {
+        'blue'      : '\033[94m',
+        'green'     : '\033[92m',
+        'yellow'    : '\033[93m',
+        'red'       : '\033[91m',
+        'bold'      : '\033[1m',
+        'underline' : '\033[4m',
+        'end'       : '\033[0m'
+    }
+    print(f'[{str(ct)[:19]}] {color_code[color]}{statement}{color_code["end"]}', end=end)
 
 '''
 Computes and appends 10/90 value to each pulse sample
@@ -277,13 +293,23 @@ Save and load TF model weights
 def save_model_weights(model, name=None):
     if not name: name = model.name
     debug_print(['saving', name, 'weights to', MODEL_SAVE_PATH])
-    model.save_weights(MODEL_SAVE_PATH + name)
-
+    model.save_weights(MODEL_SAVE_PATH + name + '.weights.h5')
 
 def load_model_weights(model, name=None):
     if not name: name = model.name
-    debug_print(['loading', name, 'weights from', MODEL_SAVE_PATH + name + '.data'])
-    model.load_weights(MODEL_SAVE_PATH + name)
+    debug_print(['loading', name, 'weights from', MODEL_SAVE_PATH + name + '.weights.h5'])
+    model.load_weights(MODEL_SAVE_PATH + name + '.weights.h5')
+    return model
+
+def save_model(model, name=None):
+    if not name: name = model.name
+    debug_print(['saving', name, 'to', MODEL_SAVE_PATH + name + '.keras'])
+    model.save(MODEL_SAVE_PATH + name + '.keras')
+
+
+def load_model(name):
+    debug_print(['loading', name, 'from', MODEL_SAVE_PATH + name + '.keras'])
+    return tf.keras.models.load_model(MODEL_SAVE_PATH + name + '.keras')
 
 
 '''
@@ -435,3 +461,24 @@ def train_test_split_all(data, test_size=0.2):
         train.append(x[:split])
         test.append(x[split:])
     return train, test
+
+def create_grid_adjacency(n):
+    adj = np.zeros((n*n, n*n))
+    for row in range(n):
+        for col in range(n):
+            index = row * n + col
+            '''
+            neighbors = [
+                (row - 1, col - 1), (row - 1, col), (row - 1, col + 1),
+                (row, col - 1),                     (row, col + 1),
+                (row + 1, col - 1), (row + 1, col), (row + 1, col + 1)
+            ]
+            '''
+            neighbors = [
+                (row - 1, col), (row, col - 1), (row, col + 1), (row + 1, col)
+            ]
+            for r, c in neighbors:
+                if 0 <= r < n and 0 <= c < n:
+                    neighbor_index = r * n + c
+                    adj[index, neighbor_index] = 1
+    return adj
