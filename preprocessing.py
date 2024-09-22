@@ -17,6 +17,8 @@ import json
 # Default save directory for stored models
 MODEL_SAVE_PATH = 'saved_models/'
 
+datetime_tag = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
 '''
 Data structure for hosting DS data and associated UL values
     self.DSdata     : Pulse height in phd (photons detected)
@@ -438,10 +440,10 @@ def convert_files_to_gif(directory, name):
             os.remove(file_path)
 
 
-def save_interactive_plot(fig, path='interactive_plot.fig.pickle'):
+def save_interactive_plot(fig, path=f'interactive_plot_{datetime_tag}.fig.pickle'):
     pickle.dump(fig, open(path, 'wb'))
 
-def load_interactive_plot(path='interactive_plot.fig.pickle'):
+def load_interactive_plot(path=f'interactive_plot_{datetime_tag}.fig.pickle'):
     with open(path, 'rb') as file: 
         fig = pickle.load(file)
         plt._backend_mod.new_figure_manager_given_figure(1, fig)
@@ -475,10 +477,18 @@ def create_grid_adjacency(n):
             ]
             '''
             neighbors = [
-                (row - 1, col), (row, col - 1), (row, col + 1), (row + 1, col)
+                (row - 1, col), (row, col - 1), (row, col), (row, col + 1), (row + 1, col)
             ]
             for r, c in neighbors:
                 if 0 <= r < n and 0 <= c < n:
                     neighbor_index = r * n + c
                     adj[index, neighbor_index] = 1
+                    adj[neighbor_index, index] = 1
+    return adj
+
+def create_zero_adjacency(n):
+    adj = np.zeros((n*n, n*n))
+    for i in range(n * n):
+        adj[i, i] = 1
+    
     return adj

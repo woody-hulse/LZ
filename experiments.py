@@ -1173,12 +1173,12 @@ def channel_photon_test(num_samples, XC, PXC, XC_FLAT, PXC_FLAT, window_size):
     plt.show()
     
 
-def plot_hit_pattern(XC, filename='hit_pattern'):
+def plot_hit_pattern(hit, filename='hit_pattern'):
     dprint('plotting hit pattern')
     image_frames = []
-    imgs = np.transpose(XC[:10], axes=[0, 3, 1, 2])
-    for t in tqdm(imgs[0]):
-        plt.imshow(t)
+    imgs = np.transpose(hit, axes=[2, 0, 1])
+    for t in tqdm(imgs):
+        plt.imshow(t, vmin=0, vmax=1)
         plt.title('Hit pattern')
         
         plt.gcf().canvas.draw()
@@ -1189,17 +1189,40 @@ def plot_hit_pattern(XC, filename='hit_pattern'):
         image_frame = Image.fromarray(image_array)
         image_frames.append(image_frame)
 
-    image_frames[0].save(filename + '.gif', 
+    datetime_tag = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    image_frames[0].save(filename + f'_{datetime_tag}.gif', 
                         save_all = True, 
                         duration = 20,
                         loop = 0,
                         append_images = image_frames[1:])
+    
+
+def plot_hit_comparison(hit1, hit2, filename='hit_comparison'):
+    dprint('plotting hit comparison')
+    image_frames = []
+    hit1, hit2 = np.transpose(hit1, axes=[2, 0, 1]), np.transpose(hit2, axes=[2, 0, 1])
+    for t1, t2 in tqdm(zip(hit1, hit2)):
+        t = np.concatenate((t1, t2), axis=1)
+        plt.imshow(t, vmin=0, vmax=1)
+        plt.title('Hit comparison')
+        
+        plt.gcf().canvas.draw()
+        width, height = plt.gcf().get_size_inches() * plt.gcf().dpi
+        data = np.frombuffer(plt.gcf().canvas.tostring_rgb(), dtype=np.uint8)
+        image_array = data.reshape(int(height), int(width), 3)
+
+        image_frame = Image.fromarray(image_array)
+        image_frames.append(image_frame)
+    
+    datetime_tag = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    image_frames[0].save(filename + f'_{datetime_tag}.gif',
+                         save_all = True,
+                         duration = 20,
+                         loop = 0,
+                         append_images = image_frames[1:])
 
 
-def graph_electron_arrival_prediction(XC, AT, epochs=100):
-
-    AT_hist = at_to_hist(AT)
-
+def graph_electron_arrival_prediction(XC, AT_hist, epochs=100):
     graph_adjacency_matrix = create_grid_adjacency(XC.shape[1])
     XC_in = XC.reshape(XC.shape[0], -1, 700)
     
@@ -1210,7 +1233,8 @@ def graph_electron_arrival_prediction(XC, AT, epochs=100):
         loss                = ScaledMeanSquaredError(delta=1.3)
     )
 
-    train(graph_model, XC_in, AT_hist, epochs=epochs, batch_size=128, plot_history=True)
+    if epochs > 0:
+        train(graph_model, XC_in, AT_hist, epochs=epochs, batch_size=128, plot_history=True)
 
     for i in range(30):
         plot_at_hist(AT_hist[i], label='True electron arrivals')
@@ -1220,34 +1244,49 @@ def graph_electron_arrival_prediction(XC, AT, epochs=100):
         plt.show()
 
 
-def graph_channel_electron_arrival_prediction(XC, CAT, epochs=100):
+def graph_channel_electron_arrival_prediction(XC, at_channel_hist, epochs=100):
     graph_adjacency_matrix = create_grid_adjacency(XC.shape[1])
     XC_in = XC.reshape(XC.shape[0], -1, 700)
 
     graph_model = GraphElectronModel(
         adjacency_matrix    = graph_adjacency_matrix,
-        graph_layer_sizes   = [700, 700, 700, 700], 
+        graph_layer_sizes   = [700, 700, 700], 
         layer_sizes         = None
     )
-
-    graph_model = load_model('graph_channel_model')
+    # graph_model = MLPElectronModel()
+    
+    graph_model = load_model('graph_channel_model_2')
     graph_model.build((None, 256, 700))
-    graph_model.compile(loss=MeanSquaredWassersteinLoss2D(), optimizer=tf.keras.optimizers.Adam(learning_rate=4e-5))
+    graph_model.compile(loss=MeanSquaredEMDLoss3D(), optimizer=tf.keras.optimizers.Adam(learning_rate=5e-4))
+    graph_model.summary()
 
-    ATX, ATY, AT = CAT[:, :, 0], CAT[:, :, 1], CAT[:, :, 2]
-    at_channel_hist = np.zeros((CAT.shape[0], 16, 16, 700))
-
-    dprint('Creating arrival time channel histogram')
-    for i, (xs, ys, ats) in tqdm(enumerate(zip(ATX, ATY, AT))):
-        for x, y, at in zip(xs, ys, ats):
-            x, y, at = np.clip(x, 0, 15), np.clip(y, 0, 15), np.clip(at, 0, 699)
-            r, c, t = round(x), round(y), round(at)
-            at_channel_hist[i, r, c, t] += 1
+    # plot_hit_comparison(at_channel_hist[0], XC[0])
     at_channel_hist = at_channel_hist.reshape(at_channel_hist.shape[0], -1, 700)
 
-    train(graph_model, XC_in, at_channel_hist, epochs=epochs, batch_size=128, plot_history=True)
+    if epochs > 0:
+        train(graph_model, XC_in, at_channel_hist, epochs=epochs, batch_size=128, plot_history=True)
 
-    # save_model(graph_model, 'graph_channel_model')
+    # save_model(graph_model, 'graph_channel_model_2')
+
+    x_test = XC_in[:5000]
+    y_test = at_channel_hist[:5000]
+    y_hat_test = graph_model(x_test)
+    y_hat_test = np.array(y_hat_test, dtype=np.float32)
+    y_test_cumsum = np.cumsum(y_test, axis=2)
+    y_hat_test_cumsum = np.cumsum(y_hat_test, axis=2)
+    test_cumsum_error = np.reshape(np.abs(y_test_cumsum - y_hat_test_cumsum), (5000 * 256, 700))
+    cumsum_error_16_84 = np.percentile(test_cumsum_error, [16, 84], axis=0)
+    mean_total_electrons = np.mean(y_test_cumsum, axis=(0, 1))
+
+    plt.fill_between(np.arange(700), cumsum_error_16_84[0], cumsum_error_16_84[1], alpha=0.5, label='16-84% error')
+    plt.plot(np.mean(test_cumsum_error, axis=0), label='Mean error')
+    plt.plot(mean_total_electrons, label='Mean electron count')
+    plt.legend()
+    plt.xlabel('Sample')
+    plt.ylabel('Number of electrons')
+    plt.title('Mean channel-level cumulative sum error for each sample')
+    plt.show()
+    
 
     for i in range(5):
         y = np.array(at_channel_hist[i], dtype=np.float32)
@@ -1294,6 +1333,9 @@ def graph_channel_electron_arrival_prediction(XC, CAT, epochs=100):
 
         dprint(f'Channel MSE: {channel_mse : .4f}, Sum MSE: {sum_mse : .4f}')
 
+        # if i == 0:
+        #     plot_hit_comparison(y, y_hat)
+
         for j in np.random.permutation(256)[:20]:
             at_channel_j_hist_i = np.cumsum(at_channel_hist_i[j])
             at_channel_j_hist_hat_i = np.cumsum(at_channel_hist_hat_i[j])
@@ -1305,8 +1347,7 @@ def graph_channel_electron_arrival_prediction(XC, CAT, epochs=100):
             plt.legend()
             plt.show()
 
-
-    for i in range(30):
+    for i in range(10):
         at_hist = np.sum(at_channel_hist[i], axis=0)
         plot_at_hist(at_hist, label='True electron arrivals')
         at_channel_hist_hat = graph_model(np.expand_dims(XC_in[i], axis=0))[0]
@@ -1320,6 +1361,69 @@ def graph_channel_electron_arrival_prediction(XC, CAT, epochs=100):
         plt.legend()
         plt.show()
 
+
+def graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100):
+    AT = np.sum(at_channel_hist, axis=(1, 2))
+
+    graph_adjacency_matrix = create_grid_adjacency(XC.shape[1])
+    XC_in = XC.reshape(XC.shape[0], -1, 700)
+
+    graph_model = GraphElectronModel(
+        adjacency_matrix    = graph_adjacency_matrix,
+        graph_layer_sizes   = [700, 256, 32], 
+        layer_sizes         = [512, 700]
+    )
+
+    # graph_model = load_model('graph_model')
+    graph_model.build((None, 256, 700))
+    graph_model.compile(loss=MeanSquaredEMDLoss3D(), optimizer=tf.keras.optimizers.Adam(learning_rate=5e-4))
+    graph_model.summary()
+
+    if epochs > 0:
+        train(graph_model, XC_in, AT, epochs=epochs, batch_size=128, plot_history=True)
+
+    save_model(graph_model, 'graph_model')
+
+    x_test, y_test = XC_in[:5000], AT[:5000]
+    y_hat_test = graph_model(x_test)
+    y_hat_test = np.array(y_hat_test, dtype=np.float32)
+    y_test_cumsum = np.cumsum(y_test, axis=1)
+    y_hat_test_cumsum = np.cumsum(y_hat_test, axis=1)
+    test_cumsum_error = np.abs(y_test_cumsum - y_hat_test_cumsum)
+    cumsum_error_16_84 = np.percentile(test_cumsum_error, [16, 84], axis=0)
+    mean_total_electrons = np.mean(y_test_cumsum, axis=0)
+
+    plt.fill_between(np.arange(700), cumsum_error_16_84[0], cumsum_error_16_84[1], alpha=0.5, label='16-84% error')
+    plt.plot(np.mean(test_cumsum_error, axis=0), label='Mean error')
+    plt.plot(mean_total_electrons, label='Mean electron count')
+    plt.legend()
+    plt.xlabel('Sample')
+    plt.ylabel('Number of electrons')
+    plt.title('Mean cumulative sum error for each sample')
+    plt.show()
+
+    for i in range(10):
+        at_i = np.array(AT[i], dtype=np.float32)
+        at_hat_i = np.array(graph_model(np.expand_dims(XC_in[i], axis=0))[0], dtype=np.float32)
+
+        y = tf.reshape(at_i, (256, 700))
+        y_hat = tf.reshape(at_hat_i, (256, 700))
+
+        y_cumsum = tf.cumsum(y, axis=1)
+        y_hat_cumsum = tf.cumsum(y_hat, axis=1)
+
+        y_cumsum_sum = tf.reduce_sum(y_cumsum, axis=0)
+        y_hat_cumsum_sum = tf.reduce_sum(y_hat_cumsum, axis=0)
+
+        sum_mse = tf.reduce_mean(tf.square(y_cumsum_sum - y_hat_cumsum_sum))
+
+        dprint(f'EMD MSE: {sum_mse : .4f}')
+
+        plt.title(f'Liquid electron arrival time histogram')
+        plot_at_hist(at_i, label=f'True electron arrivals')
+        plot_at_hist(at_hat_i, label=f'Predicted electron arrivals')
+        plt.legend()
+        plt.show()
 
 
 def test_graph_network():

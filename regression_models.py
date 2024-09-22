@@ -133,6 +133,15 @@ class MLPChannelModel(tf.keras.Model):
         
         return x
 
+
+class DummyModel(tf.keras.Model):
+    def __init__(self, name='dummy_model'):
+        super().__init__(name=name)
+    
+    def call(self, x):
+        return tf.clip_by_value(x, 0, 1)
+
+
 class ChannelScaledMeanSquaredError(tf.keras.losses.Loss):
     def __init__(self, delta=2.0):
         super().__init__()
@@ -203,7 +212,7 @@ class MeanSquaredWassersteinLoss(tf.keras.losses.Loss):
         y_hat_cumsum = tf.cumsum(y_hat, axis=2)
         return tf.math.reduce_mean((y_cumsum - y_hat_cumsum) ** 2)
 
-class MeanSquaredWassersteinLoss2D(tf.keras.losses.Loss):
+class MeanSquaredEMDLoss3D(tf.keras.losses.Loss):
     def __init__(self, rows=16, cols=16, features=700):
         super().__init__()
         self.rows = rows
@@ -237,6 +246,28 @@ class MeanSquaredWassersteinLoss2D(tf.keras.losses.Loss):
             'features': self.features
         }
 
+
+class MeanSquaredEMDLoss(tf.keras.losses.Loss):
+    def __init__(self, rows=16, cols=16, features=700):
+        super().__init__()
+        self.rows = rows
+        self.cols = cols
+        self.features = features
+    
+    def call(self, y, y_hat):
+        y_cumsum = tf.cumsum(y, axis=1)
+        y_hat_cumsum = tf.cumsum(y_hat, axis=1)
+
+        return tf.math.reduce_mean((y_cumsum - y_hat_cumsum) ** 2)
+
+    def get_config(self):
+        return {
+            'rows': self.rows,
+            'cols': self.cols,
+            'features': self.features
+        }
+
+
 class ElectronProbabilityLoss(tf.keras.losses.Loss):
     DIFFWIDTH       = 300   # ns
     G2              = 47.35
@@ -252,6 +283,23 @@ class ElectronProbabilityLoss(tf.keras.losses.Loss):
         return np.random.random(size=generated_electron_hits.shape[0])
 
 
+class MLPElectronModel(tf.keras.Model):
+    def __init__(self, layer_sizes=[700], name='mlp_electron_model_', *args, **kwargs):
+        super().__init__(name=name, **kwargs)
+        
+        initializer = tf.keras.initializers.RandomNormal(mean=0., stddev=1e-6)
+        self.dense_layers = [tf.keras.layers.Dense(size, activation='relu', kernel_initializer=initializer) 
+                             for size in layer_sizes[:-1]]
+        self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid', kernel_initializer=initializer))
+        self.rescale_layer = tf.keras.layers.Rescaling(1, offset=-1e-4)
+    
+    def call(self, x):
+        for layer in self.dense_layers:
+            x = tf.keras.layers.TimeDistributed(layer)(x)
+        x = self.rescale_layer(x)
+        return x
+
+
 class GraphElectronModel(tf.keras.Model):
     def __init__(self, adjacency_matrix, graph_layer_sizes=[1], layer_sizes=None, loss=None, **kwargs):
         super(GraphElectronModel, self).__init__(**kwargs)
@@ -264,16 +312,15 @@ class GraphElectronModel(tf.keras.Model):
         self.A = spektral.utils.convolution.gcn_filter(adjacency_matrix)
 
         self.dense_tail = layer_sizes is not None
-
-        self.graph_layers = [spektral.layers.GCNConv(size, activation='selu', attn_heads=3) for size in graph_layer_sizes[:-1]] 
-        self.rescale_layer = tf.keras.layers.Rescaling(1, offset=-1e-4)
+        self.graph_layers = [spektral.layers.GCNConv(size, activation='relu') for size in graph_layer_sizes[:-1]] 
+        self.rescale_layer = tf.keras.layers.Rescaling(1, offset=-1e-6)
 
         self.flatten_layer = None
         self.dense_layers = None
         if self.dense_tail:
-            self.graph_layers.append(spektral.layers.GCNConv(graph_layer_sizes[-1], activation='selu'))
+            self.graph_layers.append(spektral.layers.GCNConv(graph_layer_sizes[-1], activation='relu'))
             self.flatten_layer = tf.keras.layers.Flatten()
-            self.dense_layers = [tf.keras.layers.Dense(size, activation='selu') for size in layer_sizes[:-1]]
+            self.dense_layers = [tf.keras.layers.Dense(size, activation='relu') for size in layer_sizes[:-1]]
             self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
         else:
             self.graph_layers.append(spektral.layers.GCNConv(graph_layer_sizes[-1], activation='sigmoid'))

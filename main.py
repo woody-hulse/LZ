@@ -50,7 +50,7 @@ DMS_CHANNEL_FILE = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o
 # SS events with associated (binned) photon arrivals
 # DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400501_gaussgass_700samplearea7000_areafrac0o5_1.0e+04events_random_centered.npz'
 # DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400913_gaussgass_700samplearea7000_areafrac0o5_1.0e+04events_random_centered.npz'
-DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400914_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered.npz'
+DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400917_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz'
 
 '''
 Training function for tensorflow model
@@ -139,12 +139,12 @@ def regression():
 
     debug_print(['preprocessing data'])
 
-    X     = np.array([None for _ in range(int(1e6))]) # pulse
-    Y     = np.array([None for _ in range(int(1e6))]) # delta mu
-    XC    = np.array([None for _ in range(int(1e6))]) # pulse (channel-level)
-    PXC   = np.array([None for _ in range(int(1e6))]) # discrete photon arrival (channel-level)
-    AF    = np.array([None for _ in range(int(1e6))]) # area fraction
-    AT    = np.array([None for _ in range(int(1e6))]) # arrival time
+    X     = np.array([None] * int(1e6)) # pulse
+    Y     = np.array([None] * int(1e6)) # delta mu
+    XC    = np.array([None] * int(1e6)) # pulse (channel-level)
+    PXC   = np.array([None] * int(1e6)) # discrete photon arrival (channel-level)
+    AF    = np.array([None] * int(1e6)) # area fraction
+    AT    = np.array([None] * int(1e6)) # arrival time
 
     X, XC, PXC, Y, AT = load_pulse_dataset(DSS_CHANNEL_PHOTON_FILE)
 
@@ -161,7 +161,7 @@ def regression():
     AF      = AF[event_indices][:num_events]    # Area fraction of MS pulse
 
     num_samples = 1000000
-    sample_indices = np.array([i for i in range(num_samples)])
+    sample_indices = np.arange(num_samples)
     np.random.shuffle(sample_indices)
     X_FLAT = np.reshape(X, (-1, 1))
     XC_FLAT = np.reshape(XC, (-1, 1))
@@ -171,9 +171,12 @@ def regression():
     '''
     Experiments
     '''
-    # plot_hit_pattern(XC)
+    # print(np.sum(XC[0]), np.sum(AT[0]))
+    # print(np.sum(np.abs(XC[0] - AT[0])), np.sum(XC[0] - AT[0]))
+    # plot_hit_pattern(XC[0])
     # graph_electron_arrival_prediction(XC, AT[:, :, -1], epochs=50)
-    graph_channel_electron_arrival_prediction(XC, AT, epochs=25)
+    # graph_channel_electron_arrival_prediction(XC, AT, epochs=0)
+    graph_electron_arrival_prediction(XC, AT, epochs=10)
 
     # test_graph_network()
     
