@@ -3,7 +3,6 @@ from matplotlib import pyplot as plt
 import seaborn as sns
 sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
 from scipy.stats import norm
-import tensorflow as tf
 from scipy.optimize import curve_fit
 import pickle
 
@@ -73,7 +72,7 @@ Computes and appends 10/90 value to each pulse sample
 '''
 def add_1090(x):
         x = x[:, :, 0]
-        cdfs = tf.cumsum(x, axis=1)
+        cdfs =  None # tf.cumsum(x, axis=1)
         time_diffs = np.zeros((x.shape[0], 1))
         for i, cdf in tqdm(enumerate(cdfs)):
             cdf = cdf / cdf[-1]
@@ -285,135 +284,6 @@ def normalize(data):
             return None
         else: return data / np.linalg.norm(data)
 
-'''
-Save and load TF model weights
-    model           : Tensorflow model
-    name            : Save name
-
-    return          : None
-'''
-def save_model_weights(model, name=None):
-    if not name: name = model.name
-    debug_print(['saving', name, 'weights to', MODEL_SAVE_PATH])
-    model.save_weights(MODEL_SAVE_PATH + name + '.weights.h5')
-
-def load_model_weights(model, name=None):
-    if not name: name = model.name
-    debug_print(['loading', name, 'weights from', MODEL_SAVE_PATH + name + '.weights.h5'])
-    model.load_weights(MODEL_SAVE_PATH + name + '.weights.h5')
-    return model
-
-def save_model(model, name=None):
-    if not name: name = model.name
-    debug_print(['saving', name, 'to', MODEL_SAVE_PATH + name + '.keras'])
-    model.save(MODEL_SAVE_PATH + name + '.keras')
-
-
-def load_model(name):
-    debug_print(['loading', name, 'from', MODEL_SAVE_PATH + name + '.keras'])
-    return tf.keras.models.load_model(MODEL_SAVE_PATH + name + '.keras')
-
-
-'''
-Reset learned model weights to initialization
-    model           : Tensorflow model
-
-    return          : Reset model
-'''
-def reset_weights(model):
-    debug_print(['resetting', model.name, 'weights'])
-    for layer in model.layers:
-        if isinstance(layer, (tf.keras.layers.Convolution1D, tf.keras.layers.Dense)):
-            layer.set_weights([
-                tf.keras.initializers.glorot_normal()(layer.weights[0].shape),
-                tf.zeros(layer.weights[1].shape)  # Bias
-            ])
-    return model
-
-'''
-TF data generator
-'''
-class CustomDataGenerator(tf.keras.utils.Sequence):
-    def __init__(self, df, batch_size, input_size=(700, ), shuffle=True, add_noise=False):
-        self.df = df.copy()
-        self.batch_size = batch_size
-        self.input_size = input_size
-        self.shuffle = shuffle
-        #self.add_noise = add_noise
-        self.augment = add_noise
-        self.n = len(self.df)
-        self.jitter_amounts = [0.0, 0.01, 0.05, 0.1, 1.0]
-        self.jitter_index = 0
-
-    def jitter(self, pulse, jitter_amount=0.01):
-        # Gaussian noise parameters
-        mean = 0
-
-        std_dev = self.jitter_amounts[self.jitter_index]  # Use current jitter
-        return pulse + np.random.normal(mean, std_dev, len(pulse))
-
-    def time_shift(self, pulse):
-        sample_shift_amounts = np.array([-2, -1, 0, 1, 2])
-        sample_shift_amount = np.random.choice(sample_shift_amounts)
-        shifted_pulse = np.roll(pulse, sample_shift_amount)
-        if sample_shift_amount > 0: # shift right
-            shifted_pulse[:sample_shift_amount] = 0
-        elif sample_shift_amount < 0: # shift left
-            shifted_pulse[sample_shift_amount:] = 0
-        return shifted_pulse
-
-    def augment_data(self, pulse):
-        pulse = self.jitter(pulse)
-        pulse = self.time_shift(pulse)
-        return pulse
-    
-    def __get_data(self, df_batch):
-
-        training_vars = ["DSdata"]
-        target_var = ["UL_values"]
-
-        X_batch = np.array(df_batch[training_vars].values.tolist())
-        y_batch = np.array(
-            [value[1] if len(value) > 1 and row_truth == 0 else 0.0 for value, row_truth in zip(df_batch["UL_values"].values.tolist(), 
-                                                                                                df_batch['truth'])])
-        
-        X_batch = X_batch.reshape(len(X_batch), -1, 1)
-
-        if self.augment:
-            augmented_X_batch = np.array([self.augment_data(pulse[:, 0]) for pulse in X_batch])
-            augmented_X_batch = augmented_X_batch.reshape(len(augmented_X_batch), -1, 1)
-
-            # Concatenate original and augmented X_batch along the 0 axis (batch dimension)
-            X_batch = np.concatenate((X_batch, augmented_X_batch), axis=0)
-            
-            # Duplicate y_batch to match the new size of X_batch
-            y_batch = np.concatenate((y_batch, y_batch), axis=0)
-
-            #print(y_batch[:10])
-            # Count non-zero entries
-            #non_zero_count = np.count_nonzero(y_batch)
-            #print("Number of non-zero entries:", non_zero_count)
-            return X_batch, y_batch    
-
-        else:
-            # Count non-zero entries
-            #non_zero_count = np.count_nonzero(y_batch)
-            #print("Number of non-zero entries:", non_zero_count)
-            return X_batch, y_batch
-        
-    def on_epoch_end(self):
-        if self.shuffle:
-            self.df = self.df.sample(frac=1).reset_index(drop=True)
-    
-    def __getitem__(self, index):
-        df_batch = self.df[index * self.batch_size:(index + 1) * self.batch_size]
-        X, y = self.__get_data(df_batch)
-        
-        return X, y
-
-    def __len__(self):
-        return self.n // self.batch_size
-
 
 if __name__ == '__main__':
     pulses = create_simulated_pulses(100, 700)
@@ -492,3 +362,12 @@ def create_zero_adjacency(n):
         adj[i, i] = 1
     
     return adj
+
+def create_sparse_adjacency(adj):
+    # Create a sparse np matrix from a dense np adjacency matrix
+    sparse_adj = []
+    for i in range(adj.shape[0]):
+        for j in range(adj.shape[1]):
+            if adj[i, j]:
+                sparse_adj.append([i, j])
+    return np.array(sparse_adj)

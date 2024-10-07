@@ -164,6 +164,189 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
 
 
 '''
+Plot histogram for binned events
+'''
+def plot_histogram(X_binned, Y_binned, model):
+    num_bins = X_binned.shape[0]
+    assert num_bins == 20
+
+    fig, ax = plt.subplots(5, 4, figsize=(12, 12))
+
+    for i in tqdm(range(num_bins)):
+        row = i // 4
+        col = i % 4
+        X = X_binned[i]
+        y = Y_binned[i][0]
+        Y_hat = model(X)[:, 0]
+
+        ax[row][col].hist(Y_hat, bins=100, color='lightblue', edgecolor='lightblue', label='Predicted delta mu')
+        ax[row][col].axvline(y, color='red', label='True delta mu', linestyle='dashed')
+        ax[row][col].set_xlim(-10, 1010)
+        ax[row][col].set_title(f'Δμ = {y}ns')
+    
+    ax[0][0].set_xlabel('Predicted delta mu')
+    ax[0][0].set_ylabel('Count')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.suptitle(f'Delta mu predictions for each godnumber delta mu', fontsize=13)
+    plt.show()
+
+'''
+Plot confidence histogram for binned events
+'''
+def plot_confidence_histogram(X_binned, Y_binned, model):
+    num_bins = X_binned.shape[0]
+    assert num_bins == 20
+
+    fig, ax = plt.subplots(5, 4, figsize=(12, 12))
+
+    for i in tqdm(range(num_bins)):
+        row = i // 4
+        col = i % 4
+        X = X_binned[i]
+        y = Y_binned[i][0]
+        Y_output = model(X)
+        Y_hat, Y_hat_confidence = Y_output[:, 0], Y_output[:, 1]
+
+        Y_hat_confident = Y_hat[Y_hat_confidence > 0.5]
+
+        ax[row][col].hist(Y_hat, bins=100, color='lightblue', edgecolor='lightblue', label='Predicted delta mu (confidence < 0.5)')
+        ax[row][col].hist(Y_hat_confident, bins=100, color='green', edgecolor='green', label='Predicted delta mu (confidence ≥ 0.5)')
+        ax[row][col].axvline(y, color='red', label='True delta mu', linestyle='dashed')
+        ax[row][col].set_xlim(-10, 1010)
+        ax[row][col].set_title(f'Δμ = {y}ns')
+    
+    ax[0][0].set_xlabel('Predicted delta mu')
+    ax[0][0].set_ylabel('Count')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.suptitle(f'Delta mu predictions for each godnumber delta mu', fontsize=13)
+    plt.legend()
+    plt.show()
+
+'''
+Plot confidence histogram for binned events
+'''
+def plot_confidence_gradient_histogram(X_binned, Y_binned, model):
+    num_bins = X_binned.shape[0]
+    assert num_bins == 20
+
+    fig, ax = plt.subplots(5, 4, figsize=(12, 12))
+
+    for i in tqdm(range(num_bins)):
+        row = i // 4
+        col = i % 4
+        X = X_binned[i]
+        y = Y_binned[i][0]
+        Y_output = model(X)
+        Y_hat, Y_hat_confidence = Y_output[:, 0], Y_output[:, 1]
+
+        interval = 10
+        for i in range(0, interval, 1):
+            conf_thresh = i / interval
+            Y_hat_confident = Y_hat[Y_hat_confidence > conf_thresh]
+            color = cm.viridis(conf_thresh)
+            ax[row][col].hist(Y_hat_confident, bins=100, color=color, edgecolor=color, label=f'Predicted delta mu (confidence ≥ {conf_thresh})')
+
+        ax[row][col].axvline(y, color='red', label='True delta mu', linestyle='dashed')
+        ax[row][col].set_xlim(-10, 1010)
+        ax[row][col].set_title(f'Δμ = {y}ns')
+    
+    ax[0][0].set_xlabel('Predicted delta mu')
+    ax[0][0].set_ylabel('Count')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.suptitle(f'Delta mu predictions for each godnumber delta mu', fontsize=13)
+    plt.show()
+
+
+def plot_pdf_gradient_histogram(X_binned, Y_binned, model):
+    num_bins = X_binned.shape[0]
+    assert num_bins == 20
+
+    fig, ax = plt.subplots(5, 4, figsize=(12, 12))
+
+    for i in tqdm(range(num_bins)):
+        row = i // 4
+        col = i % 4
+        X = X_binned[i]
+        y = Y_binned[i][0]
+        Y_output = model(X)
+        Y_hat_mu, Y_hat_sigma, Y_hat_alpha = Y_output[:, 0] * 1000, Y_output[:, 1] * 1000, Y_output[:, 2]
+
+        interval = 20
+        for i in range(interval):
+            conf_thresh = i / interval
+            Y_hat_confident = Y_hat_mu[Y_hat_sigma / 100 > conf_thresh]
+            color = cm.viridis(conf_thresh)
+            ax[row][col].hist(Y_hat_confident, bins=100, color=color, edgecolor=color, label=f'Predicted delta mu ≥ {conf_thresh})')
+
+        ax[row][col].axvline(y, color='red', label='True delta mu', linestyle='dashed')
+        ax[row][col].set_xlim(-10, 1010)
+        ax[row][col].set_title(f'Δμ = {y}ns')
+    
+    ax[0][0].set_xlabel('Predicted delta mu')
+    ax[0][0].set_ylabel('Count')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.suptitle(f'Delta mu predictions for each godnumber delta mu', fontsize=13)
+    plt.show()
+
+
+def plot_pdf_gradient_histogram(X_binned, Y_binned, model):
+    num_bins = X_binned.shape[0]
+    assert num_bins == 20
+
+    fig, ax = plt.subplots(5, 4, figsize=(12, 12))
+
+    for i in tqdm(range(num_bins)):
+        row = i // 4
+        col = i % 4
+        X = X_binned[i]
+        y = Y_binned[i][0]
+        Y_output = model(X)
+        Y_hat_mu, Y_hat_sigma, Y_hat_alpha = Y_output[:, 0] * 1000, Y_output[:, 1] * 1000, Y_output[:, 2]
+        
+        X = np.array([X] * Y_output.shape[0])
+        Y_hat = skewnormal_pdf(X / 1000, Y_output)
+        for x, y in zip(X[:10], Y_hat[:10]):
+            ax[row][col].fill_between(x, y, color='blue', alpha=0.01)
+
+        ax[row][col].axvline(y, color='red', label='True delta mu', linestyle='dashed')
+        ax[row][col].set_xlim(-10, 1010)
+        ax[row][col].set_title(f'Δμ = {y}ns')
+    
+    ax[0][0].set_xlabel('Predicted delta mu')
+    ax[0][0].set_ylabel('Count')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.suptitle(f'Delta mu predictions for each godnumber delta mu', fontsize=13)
+    plt.show()
+
+
+
+def plot_distribution_model_examples(X, Y, model, num_examples=10):
+    for sample, dmu in zip(X[:num_examples], Y[:num_examples]):
+        output = model(np.expand_dims(sample, axis=0))
+        y_hat_mu, y_hat_sigma, y_hat_alpha = output[0, 0] * 1000, output[0, 1] * 1000, output[0, 2]
+        x = np.arange(0, 1000, 1)
+        y = skewnormal_pdf(x / 1000, output)
+
+        plt.tight_layout()
+        plt.title(f'Predicted delta mu: {y_hat_mu:.2f}ns, True delta mu: {dmu:.2f}ns')
+        plt.plot(x, y, color='blue', label='Δμ distribution')
+        plt.axvline(dmu, label=f'True Δμ: {dmu}ns', linestyle='dashed', color='red')
+        plt.fill_between(x, y, color='blue', alpha=0.5)
+        plt.xlabel('Δμ [ns]')
+        plt.ylabel('PDF')
+        plt.xlim(-5, 1005)
+        plt.ylim(0, 10)
+        plt.legend()
+        plt.show()
+
+
+
+'''
 Performs time jitter test on a list of models
     models          : List of Tensorflow models
     X               : Base X array (pulses)
@@ -250,9 +433,9 @@ def fft_experiment(X, Y):
     three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
     three_layer_mlp_2 = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
 
-    load_model_weights(three_layer_mlp)
-    load_model_weights(three_layer_mlp_2)
-    # load_model_weights(three_layer_mlp_1090)
+    load_weights(three_layer_mlp)
+    load_weights(three_layer_mlp_2)
+    # load_weights(three_layer_mlp_1090)
 
     train(three_layer_mlp_2, X_fft_train, Y_train, epochs=50)
     train(three_layer_mlp, X_train, Y_train, epochs=50)
@@ -287,7 +470,7 @@ def comparison_test(models, X_test, Y_test, X_1090_test=None):
     for model in tqdm(models):
         x_test = X_1090_test if '1090' in model.name.split('_') else X_test
         y_test = Y_test
-        load_model_weights(model)
+        load_weights(model)
         loss = tf.keras.losses.MeanAbsoluteError()(y_test, tf.transpose(model(x_test, training=False)))
         losses.append(loss)
 
@@ -339,14 +522,14 @@ def shift_distribution_test(X_train, Y_train, X_test, Y_test):
     X_train_jitter = jitter_pulses(X_train, 300)
     X_test_jitter = jitter_pulses(X_test, 300)
     three_layer_mlp = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
-    load_model_weights(three_layer_mlp)
+    load_weights(three_layer_mlp)
 
     train(three_layer_mlp, X_train_jitter, Y_train, epochs=100, batch_size=64)
     linearity_plot(three_layer_mlp, (X_test_jitter, Y_test), num_samples=500, num_delta_mu=30)
 
     three_layer_mlp_2 = MLPModel(input_size=700, output_size=1, classification=False, name='3_layer_mlp')
-    load_model_weights(three_layer_mlp)
-    # load_model_weights(three_layer_mlp_2)
+    load_weights(three_layer_mlp)
+    # load_weights(three_layer_mlp_2)
 
     X_train_shift, Y_train_shift = shift_distribution(X_train, Y_train)
     print(X_train_shift.shape)
@@ -559,7 +742,7 @@ def jitter_function_plot(model, X_train, Y_train, X_test, Y_test):
     # train(three_layer_mlp, X_train_jitter, Y_train, epochs=25, batch_size=32)
 
     # save_model_weights(model)
-    # load_model_weights(model)
+    # load_weights(model)
     train(model, X_train_jitter, Y_train, epochs=100, batch_size=64)
 
     jitters = np.zeros(300 // 5)
@@ -1255,7 +1438,7 @@ def graph_channel_electron_arrival_prediction(XC, at_channel_hist, epochs=100):
     )
     # graph_model = MLPElectronModel()
     
-    graph_model = load_model('graph_channel_model_2')
+    graph_model = load('graph_channel_model_2')
     graph_model.build((None, 256, 700))
     graph_model.compile(loss=MeanSquaredEMDLoss3D(), optimizer=tf.keras.optimizers.Adam(learning_rate=5e-4))
     graph_model.summary()
@@ -1362,25 +1545,27 @@ def graph_channel_electron_arrival_prediction(XC, at_channel_hist, epochs=100):
         plt.show()
 
 
-def graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100):
+def graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100, savefigs=True):
+    # plot_hit_comparison(at_channel_hist[0], XC[0])
     AT = np.sum(at_channel_hist, axis=(1, 2))
 
     graph_adjacency_matrix = create_grid_adjacency(XC.shape[1])
+    A_sparse = tf.sparse.from_dense(graph_adjacency_matrix)
     XC_in = XC.reshape(XC.shape[0], -1, 700)
 
     graph_model = GraphElectronModel(
         adjacency_matrix    = graph_adjacency_matrix,
         graph_layer_sizes   = [700, 256, 32], 
-        layer_sizes         = [512, 700]
+        layer_sizes         = [512, 700],
     )
 
-    # graph_model = load_model('graph_model')
+    # graph_model = load('graph_model')
     graph_model.build((None, 256, 700))
-    graph_model.compile(loss=MeanSquaredEMDLoss3D(), optimizer=tf.keras.optimizers.Adam(learning_rate=5e-4))
+    graph_model.compile(loss=MeanAbsoluteEMDLoss(), optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3))
     graph_model.summary()
 
     if epochs > 0:
-        train(graph_model, XC_in, AT, epochs=epochs, batch_size=128, plot_history=True)
+        train(graph_model, XC_in, AT, epochs=epochs, batch_size=128, plot_history=False)
 
     save_model(graph_model, 'graph_model')
 
@@ -1395,7 +1580,215 @@ def graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100):
 
     plt.fill_between(np.arange(700), cumsum_error_16_84[0], cumsum_error_16_84[1], alpha=0.5, label='16-84% error')
     plt.plot(np.mean(test_cumsum_error, axis=0), label='Mean error')
-    plt.plot(mean_total_electrons, label='Mean electron count')
+    # plt.plot(mean_total_electrons, label='Mean electron count')
+    plt.legend()
+    plt.xlabel('Sample')
+    plt.ylabel('Number of electrons')
+    plt.title('Mean cumulative sum error for each sample')
+    if savefigs:
+        plt.savefig(datetime_tag + '_graph_model_cumsum_error')
+    else:
+        plt.show()
+
+    counts = np.sum(at_channel_hist, axis=(1, 2, 3))
+    # Plot error by number of electrons in pulse
+    errors_by_counts = np.zeros((counts.shape[0], np.max(counts) + 1))
+    count_by_counts = np.zeros((counts.shape[0], np.max(counts) + 1))
+    for i in tqdm(range(0, XC.shape[0], 5000)):
+        x_test, y_test = XC_in[i:i+5000], AT[i:i+5000]
+        y_hat_test = graph_model(x_test)
+        y_hat_test = np.array(y_hat_test, dtype=np.float32)
+        y_test_cumsum = np.cumsum(y_test, axis=1)
+        y_hat_test_cumsum = np.cumsum(y_hat_test, axis=1)
+        test_cumsum_error = np.abs(y_test_cumsum - y_hat_test_cumsum)
+        for count, error in zip(counts, test_cumsum_error):
+            errors_by_counts[count] += np.sum(error)
+            count_by_counts[count] += 1
+    errors_by_counts /= count_by_counts
+    plt.plot(errors_by_counts)
+    plt.xlabel('Number of electrons in pulse')
+    plt.ylabel('Mean absolute EMD error')
+    plt.title('Mean error by number of electrons in pulse')
+    if savefigs:
+        plt.savefig(datetime_tag + '_graph_model_error_by_count')
+    else:
+        plt.show()
+
+    
+    for i in range(10):
+        at_i = np.array(AT[i], dtype=np.float32)
+        at_hat_i = np.array(graph_model(np.expand_dims(XC_in[i], axis=0))[0], dtype=np.float32)
+
+        y_cumsum = tf.cumsum(at_i, axis=0)
+        y_hat_cumsum = tf.cumsum(at_hat_i, axis=0)
+
+        sum_mse = tf.reduce_mean(tf.square(y_cumsum - y_hat_cumsum))
+
+        dprint(f'EMD MSE: {sum_mse : .4f}')
+
+        plt.title(f'Liquid electron arrival time histogram')
+        plot_at_hist(at_i, label=f'True electron arrivals')
+        plot_at_hist(at_hat_i, label=f'Predicted electron arrivals')
+        plt.legend()
+        if savefigs:
+            plt.savefig(datetime_tag + '_graph_model_at_histogram_' + str(i))
+        else:
+            plt.show()
+
+        plt.title(f'Liquid electron arrival time CDF')
+        plot_at_hist(y_cumsum, label=f'True electron arrivals')
+        plot_at_hist(y_hat_cumsum, label=f'Predicted electron arrivals')
+        plt.legend()
+        if savefigs:
+            plt.savefig(datetime_tag + '_graph_model_at_cdf_' + str(i))
+        else:
+            plt.show()
+    
+
+def conv_graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100, dim3=False, savefigs=False):
+    # plot_hit_comparison(at_channel_hist[0], XC[0])
+    AT = np.sum(at_channel_hist, axis=(1, 2))
+
+    if dim3:
+        graph_model = Conv3DGraphElectronModel(
+            graph_layer_sizes   = [4, 4, 1], 
+            layer_sizes         = [512, 700],
+        )
+    else:
+        graph_model = ConvGraphElectronModel(
+            graph_layer_sizes   = [100, 100, 100], 
+            layer_sizes         = [512, 700],
+        )
+
+    # graph_model = load('conv_graph_model' + ('_3d' if dim3 else ''))
+    if dim3:
+        XC = np.reshape(XC, (XC.shape[0], 16, 16, 700, 1))
+        graph_model.build((None, 16, 16, 700, 1))
+    else:
+        graph_model.build((None, 16, 16, 700))
+    graph_model.compile(loss=MeanAbsoluteEMDLoss(), optimizer=tf.keras.optimizers.Adam(learning_rate=4e-4))
+    graph_model.summary()
+
+    if epochs > 0:
+        train(graph_model, XC, AT, epochs=epochs, batch_size=128)#, plot_history=True)
+
+    save_model(graph_model, 'conv_graph_model' + ('_3d' if dim3 else ''))
+
+    x_test, y_test = XC[:5000], AT[:5000]
+    y_hat_test = graph_model(x_test)
+    y_hat_test = np.array(y_hat_test, dtype=np.float32)
+    y_test_cumsum = np.cumsum(y_test, axis=1)
+    y_hat_test_cumsum = np.cumsum(y_hat_test, axis=1)
+    test_cumsum_error = np.abs(y_test_cumsum - y_hat_test_cumsum)
+    cumsum_error_16_84 = np.percentile(test_cumsum_error, [16, 84], axis=0)
+    mean_total_electrons = np.mean(y_test_cumsum, axis=0)
+
+    plt.figure(figsize=(8, 6))
+    plt.tight_layout()
+    plt.fill_between(np.arange(700), cumsum_error_16_84[0], cumsum_error_16_84[1], alpha=0.5, label='16-84% error')
+    plt.plot(np.mean(test_cumsum_error, axis=0), label='Mean error')
+    # plt.plot(mean_total_electrons, label='Mean electron count')
+    plt.legend()
+    plt.xlabel('Sample')
+    plt.ylabel('Number of electrons')
+    plt.title('Mean cumulative sum error for each sample')
+    if savefigs:
+        plt.savefig(datetime_tag + '_conv_graph_model_cumsum_error' + ('_3d' if dim3 else ''))
+    else:
+        plt.show()
+
+    counts = np.sum(at_channel_hist, axis=(1, 2, 3))
+    # Plot error by number of electrons in pulse
+    errors_by_counts = np.zeros((counts.shape[0], np.max(counts) + 1))
+    count_by_counts = np.zeros((counts.shape[0], np.max(counts) + 1))
+    for i in tqdm(range(0, XC.shape[0], 5000)):
+        x_test, y_test = XC[i:i+5000], AT[i:i+5000]
+        y_hat_test = graph_model(x_test)
+        y_hat_test = np.array(y_hat_test, dtype=np.float32)
+        y_test_cumsum = np.cumsum(y_test, axis=1)
+        y_hat_test_cumsum = np.cumsum(y_hat_test, axis=1)
+        test_cumsum_error = np.abs(y_test_cumsum - y_hat_test_cumsum)
+        for count, error in zip(counts, test_cumsum_error):
+            errors_by_counts[count] += np.sum(error)
+            count_by_counts[count] += 1
+    errors_by_counts /= count_by_counts
+    plt.figure(figsize=(8, 6))
+    plt.tight_layout()
+    plt.plot(errors_by_counts)
+    plt.xlabel('Number of electrons in pulse')
+    plt.ylabel('Mean absolute EMD error')
+    plt.title('Mean error by number of electrons in pulse')
+    if savefigs:
+        plt.savefig(datetime_tag + '_conv_graph_model_error_by_count' + ('_3d' if dim3 else ''))
+    else:
+        plt.show()
+
+    
+    for i in range(10):
+        at_i = np.array(AT[i], dtype=np.float32)
+        at_hat_i = np.array(graph_model(np.expand_dims(XC[i], axis=0))[0], dtype=np.float32)
+
+        y_cumsum = tf.cumsum(at_i, axis=0)
+        y_hat_cumsum = tf.cumsum(at_hat_i, axis=0)
+
+        sum_mse = tf.reduce_mean(tf.square(y_cumsum - y_hat_cumsum))
+
+        dprint(f'EMD MSE: {sum_mse : .4f}')
+
+        plt.title(f'Liquid electron arrival time histogram')
+        plt.figure(figsize=(8, 6))
+        plt.tight_layout()
+        plot_at_hist(at_i, label=f'True electron arrivals')
+        plot_at_hist(at_hat_i, label=f'Predicted electron arrivals')
+        plt.legend()
+        if savefigs:
+            plt.savefig(datetime_tag + f'_conv_graph_model_{i}_hist' + ('_3d' if dim3 else ''))
+        else:
+            plt.show()
+
+        plt.title(f'Liquid electron arrival time CDF')
+        plt.figure(figsize=(8, 6))
+        plt.tight_layout()
+        plot_at_hist(y_cumsum, label=f'True electron arrivals')
+        plot_at_hist(y_hat_cumsum, label=f'Predicted electron arrivals')
+        plt.legend()
+        if savefigs:
+            plt.savefig(datetime_tag + f'_conv_graph_model_{i}_cdf' + ('_3d' if dim3 else ''))
+        else:
+            plt.show()
+    
+
+
+    
+
+
+def mlp_electron_arrival_prediction(X, AT, epochs=100):
+    model = MLPElectronModel(layer_sizes=[1000, 700])
+
+    # model = load('mlp_at_model')
+    model.build((None, 256, 700))
+    model.compile(loss=MeanAbsoluteEMDLoss(), optimizer=tf.keras.optimizers.Adam(learning_rate=5e-4))
+    model.summary()
+
+    if epochs > 0:
+        train(model, X, AT, epochs=epochs, batch_size=128, plot_history=True)
+    
+    save_model(model, 'mlp_at_model')
+
+    x_test, y_test = X[:5000], AT[:5000]
+    y_hat_test = model(x_test)
+    y_hat_test = np.array(y_hat_test, dtype=np.float32)
+    test_error = np.abs(y_test - y_hat_test)
+    error_16_84 = np.percentile(test_error, [16, 84], axis=0)
+    y_test_cumsum = np.cumsum(y_test, axis=1)
+    y_hat_test_cumsum = np.cumsum(y_hat_test, axis=1)
+    test_cumsum_error = np.abs(y_test_cumsum - y_hat_test_cumsum)
+    cumsum_error_16_84 = np.percentile(test_cumsum_error, [16, 84], axis=0)
+
+    mean_total_electrons = np.mean(y_test_cumsum, axis=0)
+
+    plt.fill_between(np.arange(700), cumsum_error_16_84[0], cumsum_error_16_84[1], alpha=0.5, label='16-84% error')
+    plt.plot(np.mean(test_cumsum_error, axis=0), label='Mean error')
     plt.legend()
     plt.xlabel('Sample')
     plt.ylabel('Number of electrons')
@@ -1404,18 +1797,12 @@ def graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100):
 
     for i in range(10):
         at_i = np.array(AT[i], dtype=np.float32)
-        at_hat_i = np.array(graph_model(np.expand_dims(XC_in[i], axis=0))[0], dtype=np.float32)
+        at_hat_i = np.array(model(np.expand_dims(X[i], axis=0))[0], dtype=np.float32)
 
-        y = tf.reshape(at_i, (256, 700))
-        y_hat = tf.reshape(at_hat_i, (256, 700))
+        y_cumsum = tf.cumsum(at_i, axis=0)
+        y_hat_cumsum = tf.cumsum(at_hat_i, axis=0)
 
-        y_cumsum = tf.cumsum(y, axis=1)
-        y_hat_cumsum = tf.cumsum(y_hat, axis=1)
-
-        y_cumsum_sum = tf.reduce_sum(y_cumsum, axis=0)
-        y_hat_cumsum_sum = tf.reduce_sum(y_hat_cumsum, axis=0)
-
-        sum_mse = tf.reduce_mean(tf.square(y_cumsum_sum - y_hat_cumsum_sum))
+        sum_mse = tf.reduce_mean(tf.square(y_cumsum - y_hat_cumsum))
 
         dprint(f'EMD MSE: {sum_mse : .4f}')
 
@@ -1424,6 +1811,14 @@ def graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100):
         plot_at_hist(at_hat_i, label=f'Predicted electron arrivals')
         plt.legend()
         plt.show()
+
+        plt.title(f'Liquid electron arrival time CDF')
+        plot_at_hist(y_cumsum, label=f'True electron arrivals')
+        plot_at_hist(y_hat_cumsum, label=f'Predicted electron arrivals')
+        plt.legend()
+        plt.show()
+
+    
 
 
 def test_graph_network():

@@ -9,10 +9,10 @@ from preprocessing import *
 # Parameters
 DIFFWIDTH       = 300 # ns
 G2              = 47.35
-EGASWIDTH       = 20  # EGASWIDTH       = 450   # ns
+EGASWIDTH       = 20 # 450   # ns
 PHDWIDTH        = 10  # ns
 SAMPLERATE      = 10  # ns
-NUM_ELECTRONS   = 100 # NUM_ELECTRONS   = 148
+NUM_ELECTRONS   = 148
 
 def gaussian(x, C, mu, sigma):
     return C*np.exp(-(x-mu)**2/(2*sigma**2))
@@ -22,6 +22,8 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=N
     pulse           = np.zeros((num_rows, num_cols, size), dtype=np.float16)
     photon_pulse    = np.zeros((num_rows, num_cols, size), dtype=np.int8)
     electron_pulse  = np.zeros((num_rows, num_cols, size), dtype=np.int8)
+
+    num_electrons = np.random.randint(0, 201) # 0 to 201 electrons
 
     photon_interval_width = PHDWIDTH // SAMPLERATE * 3
     photon_interval = np.array([i for i in range(-photon_interval_width, photon_interval_width + 1)])
@@ -44,7 +46,7 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=N
             photon_index = int(photon_arrival_times[p])
             photon_indices = photon_index + photon_interval
             valid_indices = (photon_indices >= 0) & (photon_indices < size)
-            photon_emission = 1 # gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width) * num_photoelectrons # Binned photon emission
+            photon_emission = gaussian(photon_indices[valid_indices], 1, photon_arrival_times[p], phd_sample_width) * num_photoelectrons # Binned photon emission
             summed_pulse[photon_indices[valid_indices]] += photon_emission
             pri, pci = min(num_cols - 1, max(0, int(pr[p]))), min(num_rows - 1, max(0, int(pc[p])))
             pulse[pri][pci][photon_indices[valid_indices]] += photon_emission
@@ -249,7 +251,7 @@ def save_pulse_dataset(summed_pulses, pulses, photon_pulses, delta_mu, electron_
     num_pulses = pulses.shape[0]
     e = '{:.1e}'.format(num_pulses)
     weat = '_withEAT' if arrival_times else ''
-    fname = f'../dSSdMS/dSS_2400917_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered.npz'
+    fname = f'../dSSdMS/dSS_2400928_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered.npz'
     np.savez_compressed(
         file=fname,
         events=summed_pulses,
@@ -272,6 +274,16 @@ def load_pulse_dataset(file):
     
     return summed_pulses, pulses, photon_pulses, delta_mu, electron_pulses
 
+def load_pulse_dataset_old(file):
+    debug_print(['loading dataset from', file])
+    with np.load(file, allow_pickle=True) as f:
+        pulses = f['DSdata']
+        dmu = f['UL_values'][:, 1]
+    
+    dprint(f'Loaded pulses with shape:   {pulses.shape}')
+    dprint(f'Loaded delta mu with shape: {dmu.shape}')
+    
+    return pulses, dmu
 
 def at_to_hist(at):
     at_hist = []

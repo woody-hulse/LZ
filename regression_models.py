@@ -1,4 +1,15 @@
-import tensorflow as tf
+from tensorflow.keras.layers import Input, Dense, Convolution2D, Convolution1D, Flatten, Reshape, MaxPooling1D, MaxPooling2D, LSTM, TimeDistributed, Attention, Rescaling
+from tensorflow.keras.layers import Conv1D, Conv2D, Conv3D, GlobalAveragePooling1D, GlobalAveragePooling2D, Concatenate, Activation, BatchNormalization, Dropout, MaxPool1D
+from tensorflow.keras.models import Model, load_model, Sequential
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.losses import BinaryCrossentropy, MeanAbsoluteError, MeanSquaredError, MeanAbsolutePercentageError, CategoricalCrossentropy, Loss, binary_crossentropy
+from tensorflow.keras.initializers import RandomNormal, RandomUniform, HeNormal, HeUniform
+from tensorflow import math as tfm
+from tensorflow import expand_dims, unstack, stack, concat, gather
+from tensorflow.nn import gelu, l2_normalize
+import tensorflow_probability as tfp
+tfd = tfp.distributions
+from scipy.sparse import csr_matrix
 import spektral
 # import keras_tuner
 import numpy as np
@@ -6,6 +17,53 @@ from vgg import *
 
 from scipy.stats import wasserstein_distance
 from matplotlib import pyplot as plt
+
+from preprocessing import debug_print, dprint, MODEL_SAVE_PATH
+
+'''
+Save and load TF model weights
+    model           : Tensorflow model
+    name            : Save name
+
+    return          : None
+'''
+def save_model_weights(model, name=None):
+    if not name: name = model.name
+    debug_print(['saving', name, 'weights to', MODEL_SAVE_PATH])
+    model.save_weights(MODEL_SAVE_PATH + name + '.weights.h5')
+
+def load_model_weights(model, name=None):
+    if not name: name = model.name
+    debug_print(['loading', name, 'weights from', MODEL_SAVE_PATH + name + '.weights.h5'])
+    model.load_weights(MODEL_SAVE_PATH + name + '.weights.h5')
+    return model
+
+def save_model(model, name=None):
+    if not name: name = model.name
+    debug_print(['saving', name, 'to', MODEL_SAVE_PATH + name + '.keras'])
+    model.save(MODEL_SAVE_PATH + name + '.keras')
+
+
+def load(name):
+    debug_print(['loading', name, 'from', MODEL_SAVE_PATH + name + '.keras'])
+    return load_model(MODEL_SAVE_PATH + name + '.keras')
+
+
+'''
+Reset learned model weights to initialization
+    model           : Tensorflow model
+
+    return          : Reset model
+'''
+def reset_weights(model):
+    debug_print(['resetting', model.name, 'weights'])
+    for layer in model.layers:
+        if isinstance(layer, (Convolution1D, Dense)):
+            layer.set_weights([
+                tf.keras.initializers.glorot_normal()(layer.weights[0].shape),
+                tf.zeros(layer.weights[1].shape)  # Bias
+            ])
+    return model
 
 
 # VGG16-based 1D convolutional neural network
@@ -21,20 +79,20 @@ class ConvModel(tf.keras.Model):
         num_block5 = 5
         num_dense = 2
 
-        block1 = [tf.keras.layers.Convolution1D(filters=32, kernel_size=3, strides=1) for _ in range(num_block1)]
-        block2 = [tf.keras.layers.Convolution1D(filters=32, kernel_size=3, strides=1) for _ in range(num_block2)]
-        block3 = [tf.keras.layers.Convolution1D(filters=64, kernel_size=5, strides=1) for _ in range(num_block3)]
-        block4 = [tf.keras.layers.Convolution1D(filters=64, kernel_size=5, strides=1) for _ in range(num_block4)]
-        block5 = [tf.keras.layers.Convolution1D(filters=64, kernel_size=7, strides=1) for _ in range(num_block5)]
+        block1 = [Convolution1D(filters=32, kernel_size=3, strides=1) for _ in range(num_block1)]
+        block2 = [Convolution1D(filters=32, kernel_size=3, strides=1) for _ in range(num_block2)]
+        block3 = [Convolution1D(filters=64, kernel_size=5, strides=1) for _ in range(num_block3)]
+        block4 = [Convolution1D(filters=64, kernel_size=5, strides=1) for _ in range(num_block4)]
+        block5 = [Convolution1D(filters=64, kernel_size=7, strides=1) for _ in range(num_block5)]
 
         self.blocks = [block1, block2, block3, block4, block5]
-        self.pooling_layer = tf.keras.layers.MaxPooling1D(pool_size=2)
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(128, activation='relu') for _ in range(num_dense)]
-        self.output_layer = tf.keras.layers.Dense(1)
+        self.pooling_layer = MaxPooling1D(pool_size=2)
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(128, activation='relu') for _ in range(num_dense)]
+        self.output_layer = Dense(1)
 
-        self.optimizer = tf.keras.optimizers.Adam()
-        self.loss = tf.keras.losses.MeanAbsoluteError()
+        self.optimizer = Adam()
+        self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
@@ -62,19 +120,19 @@ class ConvChannelModel(tf.keras.Model):
         name = name[:-1]
         super().__init__(name=name)
         
-        self.conv_layers = [tf.keras.layers.Conv2D(num_filters, kernel_size, activation='leaky_relu', padding='valid') for _ in range(num_conv)]
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(size, activation='leaky_relu') for size in layer_sizes[:-1]]
+        self.conv_layers = [Conv2D(num_filters, kernel_size, activation='leaky_relu', padding='valid') for _ in range(num_conv)]
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(size, activation='leaky_relu') for size in layer_sizes[:-1]]
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam(1e-5)
+        self.optimizer = Adam(1e-5)
         if classification: 
-            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.dense_layers.append(Dense(layer_sizes[-1], activation='sigmoid'))
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
-            self.loss = tf.keras.losses.MeanSquaredError()
+            self.dense_layers.append(Dense(layer_sizes[-1], activation='linear'))
+            self.loss = MeanSquaredError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
@@ -98,24 +156,24 @@ class MLPChannelModel(tf.keras.Model):
         super().__init__(name=name)
         
         self.heads = heads
-        self.reshape_layer = tf.keras.layers.Reshape((-1, input_size))
-        self.td_heads = [tf.keras.Sequential([tf.keras.layers.Dense(size, activation='leaky_relu') for size in head_sizes]) for _ in range(heads)]
-        self.flatten_layer = tf.keras.layers.Flatten()
+        self.reshape_layer = Reshape((-1, input_size))
+        self.td_heads = [tf.keras.Sequential([Dense(size, activation='leaky_relu') for size in head_sizes]) for _ in range(heads)]
+        self.flatten_layer = Flatten()
         self.dense_layers = [
-            tf.keras.layers.Dense(512, activation='leaky_relu'),
-            tf.keras.layers.Dense(256, activation='leaky_relu')
+            Dense(512, activation='leaky_relu'),
+            Dense(256, activation='leaky_relu')
         ]
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
         if classification: 
-            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.dense_layers.append(Dense(layer_sizes[-1], activation='sigmoid'))
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
-            # self.loss = tf.keras.losses.MeanSquaredError()
-            self.loss = tf.keras.losses.MeanSquaredError()
+            self.dense_layers.append(Dense(layer_sizes[-1], activation='linear'))
+            # self.loss = MeanSquaredError()
+            self.loss = MeanSquaredError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
@@ -142,7 +200,7 @@ class DummyModel(tf.keras.Model):
         return tf.clip_by_value(x, 0, 1)
 
 
-class ChannelScaledMeanSquaredError(tf.keras.losses.Loss):
+class ChannelScaledMeanSquaredError(Loss):
     def __init__(self, delta=2.0):
         super().__init__()
         self.delta = tf.cast(delta, tf.float32)
@@ -159,7 +217,7 @@ class ChannelScaledMeanSquaredError(tf.keras.losses.Loss):
         return scaled_mean_square_error + mean_squared_error
 
 
-class ScaledMeanSquaredError(tf.keras.losses.Loss):
+class ScaledMeanSquaredError(Loss):
     def __init__(self, delta=2.0):
         super().__init__()
         self.delta = tf.cast(delta, tf.float32)
@@ -178,13 +236,13 @@ class BaselinePhotonModel(tf.keras.Model):
         name = name[:-1]
         super().__init__(name=name)
 
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(size, activation='sigmoid') for size in layer_sizes[:-1]]
-        self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(size, activation='sigmoid') for size in layer_sizes[:-1]]
+        self.dense_layers.append(Dense(layer_sizes[-1], activation='sigmoid'))
 
-        self.rescale_layer = tf.keras.layers.Rescaling(max + 1, offset=-1e-2)
-        self.optimizer = tf.keras.optimizers.Adam()
-        # self.loss = tf.keras.losses.MeanSquaredError()
+        self.rescale_layer = Rescaling(max + 1, offset=-1e-2)
+        self.optimizer = Adam()
+        # self.loss = MeanSquaredError()
         self.loss = ScaledMeanSquaredError(delta=delta)
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
@@ -203,16 +261,16 @@ class BaselinePhotonModel(tf.keras.Model):
         self.built = True
 
 
-class MeanSquaredWassersteinLoss(tf.keras.losses.Loss):
+class MeanSquaredWassersteinLoss(Loss):
     def __init__(self):
         super().__init__()
     
     def call(self, y, y_hat):
         y_cumsum = tf.cumsum(y, axis=2)
         y_hat_cumsum = tf.cumsum(y_hat, axis=2)
-        return tf.math.reduce_mean((y_cumsum - y_hat_cumsum) ** 2)
+        return tfm.reduce_mean((y_cumsum - y_hat_cumsum) ** 2)
 
-class MeanSquaredEMDLoss3D(tf.keras.losses.Loss):
+class MeanSquaredEMDLoss3D(Loss):
     def __init__(self, rows=16, cols=16, features=700):
         super().__init__()
         self.rows = rows
@@ -234,8 +292,8 @@ class MeanSquaredEMDLoss3D(tf.keras.losses.Loss):
         y_cumsum_sum = tf.reduce_sum(y_cumsum, axis=[1, 2])
         y_hat_cumsum_sum = tf.reduce_sum(y_hat_cumsum, axis=[1, 2])
 
-        channel_mse = tf.math.reduce_mean(tf.square(y_cumsum_xy - y_hat_cumsum_xy))
-        sum_mse = tf.math.reduce_mean(tf.square(y_cumsum_sum - y_hat_cumsum_sum))
+        channel_mse = tfm.reduce_mean(tf.square(y_cumsum_xy - y_hat_cumsum_xy))
+        sum_mse = tfm.reduce_mean(tf.square(y_cumsum_sum - y_hat_cumsum_sum))
 
         return channel_mse + sum_mse
 
@@ -247,7 +305,7 @@ class MeanSquaredEMDLoss3D(tf.keras.losses.Loss):
         }
 
 
-class MeanSquaredEMDLoss(tf.keras.losses.Loss):
+class MeanSquaredEMDLoss(Loss):
     def __init__(self, rows=16, cols=16, features=700):
         super().__init__()
         self.rows = rows
@@ -258,7 +316,10 @@ class MeanSquaredEMDLoss(tf.keras.losses.Loss):
         y_cumsum = tf.cumsum(y, axis=1)
         y_hat_cumsum = tf.cumsum(y_hat, axis=1)
 
-        return tf.math.reduce_mean((y_cumsum - y_hat_cumsum) ** 2)
+        emd_loss = tfm.reduce_mean((y_cumsum - y_hat_cumsum) ** 2)
+        square_error_loss = tfm.reduce_mean((y - y_hat) ** 2)
+
+        return emd_loss # + square_error_loss
 
     def get_config(self):
         return {
@@ -268,7 +329,21 @@ class MeanSquaredEMDLoss(tf.keras.losses.Loss):
         }
 
 
-class ElectronProbabilityLoss(tf.keras.losses.Loss):
+class MeanAbsoluteEMDLoss(Loss):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    def call(self, y, y_hat):
+        y_cumsum = tf.cumsum(y, axis=1)
+        y_hat_cumsum = tf.cumsum(y_hat, axis=1)
+
+        emd_loss = tfm.reduce_mean(tf.abs(y_cumsum - y_hat_cumsum))
+        loss = tfm.reduce_mean(tf.abs(y - y_hat))
+
+        return emd_loss + loss
+
+
+class ElectronProbabilityLoss(Loss):
     DIFFWIDTH       = 300   # ns
     G2              = 47.35
     EGASWIDTH       = 450   # ns
@@ -288,53 +363,55 @@ class MLPElectronModel(tf.keras.Model):
         super().__init__(name=name, **kwargs)
         
         initializer = tf.keras.initializers.RandomNormal(mean=0., stddev=1e-6)
-        self.dense_layers = [tf.keras.layers.Dense(size, activation='relu', kernel_initializer=initializer) 
+        self.dense_layers = [Dense(size, activation='relu', kernel_initializer=initializer) 
                              for size in layer_sizes[:-1]]
-        self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid', kernel_initializer=initializer))
-        self.rescale_layer = tf.keras.layers.Rescaling(1, offset=-1e-4)
+        self.dense_layers.append(Dense(layer_sizes[-1], activation='sigmoid', kernel_initializer=initializer))
+        self.rescale_layer = Rescaling(1, offset=-1e-4)
     
     def call(self, x):
         for layer in self.dense_layers:
-            x = tf.keras.layers.TimeDistributed(layer)(x)
+            x = TimeDistributed(layer)(x)
         x = self.rescale_layer(x)
         return x
 
 
 class GraphElectronModel(tf.keras.Model):
-    def __init__(self, adjacency_matrix, graph_layer_sizes=[1], layer_sizes=None, loss=None, **kwargs):
+    def __init__(self, adjacency_matrix, graph_layer_sizes=[1], layer_sizes=None, scale_factor=1, **kwargs):
         super(GraphElectronModel, self).__init__(**kwargs)
         
         if type(adjacency_matrix) == dict: # for deserialization
             adjacency_matrix = np.array(adjacency_matrix['config']['value'])
         self.adjacency_matrix = adjacency_matrix
+        self.A = spektral.utils.gcn_filter(adjacency_matrix)
         self.graph_layer_sizes = graph_layer_sizes
         self.layer_sizes = layer_sizes
-        self.A = spektral.utils.convolution.gcn_filter(adjacency_matrix)
 
         self.dense_tail = layer_sizes is not None
         self.graph_layers = [spektral.layers.GCNConv(size, activation='relu') for size in graph_layer_sizes[:-1]] 
-        self.rescale_layer = tf.keras.layers.Rescaling(1, offset=-1e-6)
+        self.scale_factor = scale_factor
+        self.rescale_layer = Rescaling(scale_factor, offset=-1e-6)
 
         self.flatten_layer = None
         self.dense_layers = None
         if self.dense_tail:
             self.graph_layers.append(spektral.layers.GCNConv(graph_layer_sizes[-1], activation='relu'))
-            self.flatten_layer = tf.keras.layers.Flatten()
-            self.dense_layers = [tf.keras.layers.Dense(size, activation='relu') for size in layer_sizes[:-1]]
-            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
+            self.flatten_layer = Flatten()
+            self.dense_layers = [Dense(size, activation='relu') for size in layer_sizes[:-1]]
+            self.dense_layers.append(Dense(layer_sizes[-1], activation='linear'))
         else:
             self.graph_layers.append(spektral.layers.GCNConv(graph_layer_sizes[-1], activation='sigmoid'))
 
     def call(self, x):
+        # self.A_sparse = spektral.utils.sparse.sp_matrix_to_sp_tensor(self.adjacency_matrix)
         for graph_layer in self.graph_layers:
+            # A_sparse = spektral.utils.sparse.sp_matrix_to_sp_tensor(csr_matrix(self.adjacency_matrix))
             x = graph_layer([x, self.A])
 
         if self.dense_tail:
             x = self.flatten_layer(x)
             for layer in self.dense_layers:
                 x = layer(x)
-        else:
-            x = self.rescale_layer(x)
+        
         return x
 
     def debug_call(self, x):
@@ -350,9 +427,184 @@ class GraphElectronModel(tf.keras.Model):
         config.update({
             'adjacency_matrix': self.adjacency_matrix,
             'graph_layer_sizes': self.graph_layer_sizes,
-            'layer_sizes': self.layer_sizes
+            'layer_sizes': self.layer_sizes,
+            'scale_factor': self.scale_factor
         })
         return config
+    
+
+class GraphElectronModel2(tf.keras.Model):
+    def __init__(self, adjacency_matrix, graph_layer_sizes=[1], layer_sizes=None, scale_factor=1, **kwargs):
+        super(GraphElectronModel2, self).__init__(**kwargs)
+        
+        if type(adjacency_matrix) == dict: # for deserialization
+            adjacency_matrix = np.array(adjacency_matrix['config']['value'])
+        self.adjacency_matrix = adjacency_matrix
+        self.A = spektral.utils.gcn_filter(adjacency_matrix)
+        self.graph_layer_sizes = graph_layer_sizes
+        self.layer_sizes = layer_sizes
+
+        self.dense_tail = layer_sizes is not None
+        self.graph_layers = [MLPMessagePassing(size) for size in graph_layer_sizes[:-1]] 
+        self.scale_factor = scale_factor
+        self.rescale_layer = Rescaling(scale_factor, offset=-1e-6)
+
+        self.flatten_layer = None
+        self.dense_layers = None
+        if self.dense_tail:
+            self.graph_layers.append(MLPMessagePassing(graph_layer_sizes[-1]))
+            self.flatten_layer = Flatten()
+            self.dense_layers = [Dense(size, activation='relu') for size in layer_sizes[:-1]]
+            self.dense_layers.append(Dense(layer_sizes[-1], activation='linear'))
+        else:
+            self.graph_layers.append(MLPMessagePassing(graph_layer_sizes[-1]))
+
+    def call(self, inputs):
+        x, a = inputs
+        # self.A_sparse = spektral.utils.sparse.sp_matrix_to_sp_tensor(self.adjacency_matrix)
+        for graph_layer in self.graph_layers:
+            # A_sparse = spektral.utils.sparse.sp_matrix_to_sp_tensor(csr_matrix(self.adjacency_matrix))
+            x = graph_layer([x, a])
+
+        if self.dense_tail:
+            x = self.flatten_layer(x)
+            for layer in self.dense_layers:
+                x = layer(x)
+        
+        return x
+
+    def debug_call(self, x):
+        intermediate = [x]
+        for graph_layer in self.graph_layers:
+            x = graph_layer([x, self.A])
+            intermediate.append(x)
+
+        return intermediate
+
+    def get_config(self):
+        config = super(GraphElectronModel, self).get_config()
+        config.update({
+            'adjacency_matrix': self.adjacency_matrix,
+            'graph_layer_sizes': self.graph_layer_sizes,
+            'layer_sizes': self.layer_sizes,
+            'scale_factor': self.scale_factor
+        })
+        return config
+    
+
+
+class MLPMessagePassing(spektral.layers.MessagePassing):
+    def __init__(self, channels, mlp_hidden_units=64, **kwargs):
+        # Initialize the parent class and the MLP
+        super().__init__(**kwargs)
+        self.channels = channels
+        self.mlp = tf.keras.Sequential([
+            Dense(mlp_hidden_units, activation='relu'),
+            Dense(channels, activation='relu')  # Output dimension of message should match channels
+        ])
+    
+    def build(self, input_shape):
+        super().build(input_shape)
+    
+    def message(self, x_i, x_j, e_ij=None):
+        if e_ij is not None:
+            message_input = tf.concat([x_i, x_j, e_ij], axis=-1)
+        else:
+            message_input = tf.concat([x_i, x_j], axis=-1)
+        return self.mlp(message_input)
+    
+    def aggregate(self, messages, index):
+        return tf.math.unsorted_segment_mean(messages, index, num_segments=tf.reduce_max(index) + 1)
+    
+    def update(self, embeddings):
+        return embeddings
+    
+    def call(self, inputs):
+        x, a = inputs[:2]
+        e = inputs[2] if len(inputs) == 3 else None
+
+        # if not isinstance(a, tf.sparse.SparseTensor):
+        #     a = tf.sparse.from_dense(a)
+        
+        # Perform message passing using the parent class's propagate method
+        return self.propagate(x=x, a=a)
+    
+
+class ConvGraphElectronModel(tf.keras.Model):
+    def __init__(self, graph_layer_sizes, layer_sizes, **kwargs):
+        super(ConvGraphElectronModel, self).__init__(**kwargs)
+        
+        self.graph_layer_sizes = graph_layer_sizes
+        self.layer_sizes = layer_sizes
+
+        self.graph_layers = [Conv2D(kernel_size=(3, 3), filters=size, activation='selu', padding='valid') for size in graph_layer_sizes]
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(size, activation='selu') for size in layer_sizes[:-1]]
+        self.dense_layers.append(Dense(layer_sizes[-1], activation='linear'))
+    
+    def call(self, x):
+        for graph_layer in self.graph_layers:
+            x = graph_layer(x)
+        
+        x = self.flatten_layer(x)
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        return x
+    
+    def get_config(self):
+        config = super(ConvGraphElectronModel, self).get_config()
+        config.update({
+            'graph_layer_sizes': self.graph_layer_sizes,
+            'layer_sizes': self.layer_sizes,
+        })
+        return config
+    
+
+class Conv3DGraphElectronModel(tf.keras.Model):
+    def __init__(self, graph_layer_sizes, layer_sizes, **kwargs):
+        super(Conv3DGraphElectronModel, self).__init__(**kwargs)
+        
+        self.graph_layer_sizes = graph_layer_sizes
+        self.layer_sizes = layer_sizes
+
+        self.graph_layers = [Conv3D(kernel_size=(3, 3, 4), filters=size, activation='selu', padding='valid') for size in graph_layer_sizes]
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(size, activation='selu') for size in layer_sizes[:-1]]
+        self.dense_layers.append(Dense(layer_sizes[-1], activation='linear'))
+    
+    def call(self, x):
+        for graph_layer in self.graph_layers:
+            x = graph_layer(x)
+        
+        x = self.flatten_layer(x)
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        return x
+    
+    def get_config(self):
+        config = super(Conv3DGraphElectronModel, self).get_config()
+        config.update({
+            'graph_layer_sizes': self.graph_layer_sizes,
+            'layer_sizes': self.layer_sizes,
+        })
+        return config
+
+    
+
+class MLPElectronModel(tf.keras.Model):
+    def __init__(self, layer_sizes=[700], name='mlp_electron_model_', *args, **kwargs):
+        super().__init__(name=name, **kwargs)
+        
+        self.dense_layers = [Dense(size, activation='sigmoid') 
+                             for size in layer_sizes[:-1]]
+        self.dense_layers.append(Dense(layer_sizes[-1], activation='linear'))
+    
+    def call(self, x):
+        for layer in self.dense_layers:
+            x = layer(x)
+        return x
 
 
     
@@ -363,12 +615,12 @@ class BaselinePhotonClassifier(tf.keras.Model):
         name = name[:-1]
         super().__init__(name=name)
 
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(size, activation='sigmoid') for size in layer_sizes[:-1]]
-        self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='softmax'))
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(size, activation='sigmoid') for size in layer_sizes[:-1]]
+        self.dense_layers.append(Dense(layer_sizes[-1], activation='softmax'))
 
-        self.optimizer = tf.keras.optimizers.Adam()
-        self.loss = tf.keras.losses.CategoricalCrossentropy()
+        self.optimizer = Adam()
+        self.loss = CategoricalCrossentropy()
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
             self.build((None, input_size))
@@ -389,8 +641,8 @@ class ChannelPhotonModel(tf.keras.Model):
 
         self.model = BaselinePhotonModel(input_size=input_size, layer_sizes=layer_sizes, max=max)
 
-        self.optimizer = tf.keras.optimizers.Adam()
-        self.loss = tf.keras.losses.MeanSquaredError()
+        self.optimizer = Adam()
+        self.loss = MeanSquaredError()
         # self.loss = ScaledMeanSquaredError(delta=1 + 0.9 ** max)
         # self.loss = ScaledMeanSquaredError(delta=2)
         # self.loss = ChannelScaledMeanSquaredError(delta=2)
@@ -399,7 +651,7 @@ class ChannelPhotonModel(tf.keras.Model):
             self.build((None, channel_size, 1))
     
     def call(self, x):
-        x = tf.keras.layers.TimeDistributed(self.model)(x)
+        x = TimeDistributed(self.model)(x)
         return x
 
 
@@ -410,19 +662,19 @@ class CustomMLPModel(tf.keras.Model):
         name = name[:-1]
         super().__init__(name=name)
         
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(size, activation='leaky_relu') for size in layer_sizes[:-1]]
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(size, activation='leaky_relu') for size in layer_sizes[:-1]]
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+        self.optimizer = Adam(learning_rate=1e-4)
         if classification: 
-            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='sigmoid'))
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.dense_layers.append(Dense(layer_sizes[-1], activation='sigmoid'))
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.dense_layers.append(tf.keras.layers.Dense(layer_sizes[-1], activation='linear'))
-            # self.loss = tf.keras.losses.MeanSquaredError()
-            self.loss = tf.keras.losses.MeanSquaredError()
+            self.dense_layers.append(Dense(layer_sizes[-1], activation='linear'))
+            # self.loss = MeanSquaredError()
+            self.loss = MeanSquaredError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
@@ -435,7 +687,7 @@ class CustomMLPModel(tf.keras.Model):
         
         return x
 
-class RelativeError(tf.keras.losses.Loss):
+class RelativeError(Loss):
     def __init__(self, e=1e-2):
         super().__init__()
         self.e = e
@@ -443,9 +695,9 @@ class RelativeError(tf.keras.losses.Loss):
     def call(self, y, y_hat):
         y = tf.squeeze(y)
         epsilon = tf.ones_like(y) * self.e
-        return tf.keras.losses.MeanAbsolutePercentageError()(y + epsilon, y_hat + epsilon)
+        return MeanAbsolutePercentageError()(y + epsilon, y_hat + epsilon)
 
-class BinnedError(tf.keras.losses.Loss):
+class BinnedError(Loss):
     def __init__(self, lam=0.9):
         super().__init__()
         self.lam = lam
@@ -455,7 +707,7 @@ class BinnedError(tf.keras.losses.Loss):
         ve = 0 # tf.square(tf.reduce_sum(tf.abs(y), axis=1) - tf.reduce_sum(tf.abs(y_hat), axis=1))
         return tf.reduce_mean(self.lam * mse + (1 - self.lam) * ve)
     
-class BinnedRelativeError(tf.keras.losses.Loss):
+class BinnedRelativeError(Loss):
     def __init__(self, e=1e-1, lam=0.9999):
         super().__init__()
         self.e = e
@@ -474,12 +726,12 @@ class CustomMLPBinnedModel(tf.keras.Model):
         name = name[:-1]
         super().__init__(name=name)
         
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(size, activation='leaky_relu') for size in layer_sizes]
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(size, activation='leaky_relu') for size in layer_sizes]
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
-        self.dense_layers.append(tf.keras.layers.Dense(input_size, activation='linear'))
+        self.optimizer = Adam()
+        self.dense_layers.append(Dense(input_size, activation='linear'))
         self.loss = BinnedError()
 
         if input_size:
@@ -497,58 +749,211 @@ class CustomMLPBinnedModel(tf.keras.Model):
 
 def tuner_model(hp):
     model = tf.keras.Sequential()
-    model.add(tf.keras.layers.Dense(hp.Choice('units1', [150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
-    model.add(tf.keras.layers.Dense(hp.Choice('units2', [100, 75, 50, 25, 15, 10, 5]), activation='selu'))
-    model.add(tf.keras.layers.Dense(1, activation='linear'))
+    model.add(Dense(hp.Choice('units1', [150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    model.add(Dense(hp.Choice('units2', [100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    model.add(Dense(1, activation='linear'))
     model.compile(loss='mae')
     return model
     
 def tuner_model_2(hp):
     model = tf.keras.Sequential()
-    model.add(tf.keras.layers.Dense(hp.Choice('units1', [700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    model.add(Dense(hp.Choice('units1', [700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
     if hp.Boolean('layer2'):
-        model.add(tf.keras.layers.Dense(hp.Choice('units2', [600, 550, 500, 450, 400, 350, 300, 250, 200, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+        model.add(Dense(hp.Choice('units2', [600, 550, 500, 450, 400, 350, 300, 250, 200, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
     if hp.Boolean('layer3'):
-        model.add(tf.keras.layers.Dense(hp.Choice('units3', [500, 450, 400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+        model.add(Dense(hp.Choice('units3', [500, 450, 400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
     if hp.Boolean('layer4'):
-        model.add(tf.keras.layers.Dense(hp.Choice('units4', [400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
-    model.add(tf.keras.layers.Dense(1, activation='linear'))
+        model.add(Dense(hp.Choice('units4', [400, 350, 300, 250, 200, 150, 100, 75, 50, 25, 15, 10, 5]), activation='selu'))
+    model.add(Dense(1, activation='linear'))
     model.compile(loss='mae')
     return model
 
 
+class SquareRootError(Loss):
+    def __init__(self):
+        super().__init__()
+    
+    def call(self, y, y_hat):
+        return tf.reduce_mean(tf.sqrt(tf.abs(y - y_hat) + 1))
+    
+class PowError(tf.keras.losses.Loss):
+    def __init__(self, p=1.0, name="mean_absolute_error"):
+        super(PowError, self).__init__(name=name)
+        self.p = p
+
+    def call(self, y_true, y_pred):
+        abs_diff = tf.abs(y_true - y_pred)
+        abs_diff_pow = tf.pow(abs_diff, self.p)
+        return tf.reduce_mean(abs_diff)
+    
+def mean_absolute_error(y_true, y_pred):
+    abs_diff = tf.abs(y_true - y_pred)
+    abs_diff_pow = tf.pow(abs_diff, 1.0)
+    return tf.reduce_mean(abs_diff_pow)
+
+def mean_square_root_error(y_true, y_pred):
+    return tf.reduce_mean(tf.sqrt(tf.abs(y_true - y_pred)))
+
+POW = 0.8
+def mean_absolute_power_error(y_true, y_pred):
+    abs_diff = tf.abs(y_true - y_pred)
+    abs_diff_pow = tf.pow(abs_diff, POW)
+    return tf.reduce_mean(abs_diff_pow)
+
+def mean_log_error(y_true, y_pred):
+    return tf.reduce_mean(tf.math.log(tf.abs(y_true - y_pred) + 1))
+    
+
+class LogError(Loss):
+    def __init__(self):
+        super().__init__()
+    
+    def call(self, y, y_hat):
+        return tf.reduce_mean(tf.math.log(tf.abs(y - y_hat) + 1))
+    
+
+class CustomMeanAbsoluteError(tf.keras.losses.Loss):
+    def __init__(self, name="mean_absolute_error"):
+        super(CustomMeanAbsoluteError, self).__init__(reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE, name=name)
+
+    def call(self, y_true, y_pred):
+        y_true = tf.cast(y_true, dtype=tf.float32)
+        y_pred = tf.cast(y_pred, dtype=tf.float32)
+
+        abs_diff = tf.abs(y_true - y_pred)
+        return tf.reduce_mean(abs_diff)
+
+
 class MLPModel(tf.keras.Model):
-    def __init__(self, input_size=None, output_size=1, classification=False, name='mlp_model'):
+    def __init__(self, name='mlp_model'):
         super().__init__(name=name)
 
-        dense1 = tf.keras.layers.Dense(512, activation='relu')
-        dense2 = tf.keras.layers.Dense(128, activation='relu')
-        dense3 = tf.keras.layers.Dense(32, activation='relu')
-        dense4 = tf.keras.layers.Dense(output_size)
+        initializer = HeNormal()
+        dense1 = Dense(700, kernel_initializer=initializer, activation='selu')
+        dense2 = Dense(512, kernel_initializer=initializer, activation='selu')
+        dense3 = Dense(128, kernel_initializer=initializer, activation='selu')
+        dense4 = Dense(1, kernel_initializer=initializer, activation='linear')
 
-        self.flatten_layer = tf.keras.layers.Flatten()
         self.dense_layers = [dense1, dense2, dense3, dense4]
 
-        metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
-        if classification: 
-            self.loss = tf.keras.losses.BinaryCrossentropy()
-            metrics.append('AUC')
-        else: 
-            self.loss = tf.keras.losses.MeanAbsoluteError()
-            # self.loss = tf.keras.losses.MeanSquaredError()
-            # metrics.append(tf.keras.losses.MeanAbsoluteError())
-
-        if input_size:
-            self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
-            self.build((None, input_size, 1))
-
     def call(self, x):
-        x = self.flatten_layer(x)
         for layer in self.dense_layers:
             x = layer(x)
         
         return x
+    
+
+def confidence_mae_loss(y_true, output):
+    confidence_exponent = 3
+    confidence_threshold = 100
+
+    y_pred, confidence = output[:, 0], output[:, 1]
+
+    x = tf.abs(y_true - y_pred)
+    return (1 - confidence) * x + confidence * tf.pow(x / confidence_threshold, confidence_exponent) * confidence_threshold
+
+
+def eval_mae_loss(y_true, output):
+    y_pred = output[:, 0]
+    x = tf.abs(y_true - y_pred)
+    return x
+
+
+class MLPConfidenceModel(tf.keras.Model):
+    def __init__(self, name='mlp_confidence_model'):
+        super().__init__(name=name)
+
+        initializer = HeNormal()
+        dense1 = Dense(700, kernel_initializer=initializer, activation='selu')
+        dense2 = Dense(512, kernel_initializer=initializer, activation='selu')
+        dense3 = Dense(128, kernel_initializer=initializer, activation='selu')
+        
+        self.linear_ouput = Dense(1, kernel_initializer=initializer, activation='linear')
+        self.confidence_output = Dense(1, kernel_initializer=initializer, activation='sigmoid')
+
+        self.dense_layers = [dense1, dense2, dense3]
+
+    def call(self, x):
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        linear_output = self.linear_ouput(x)
+        confidence_output = self.confidence_output(x)
+
+        concat_output = tf.concat([linear_output, confidence_output], axis=-1)
+
+        return concat_output
+
+
+def skewnormal_pdf(x, params):
+    mu, sigma, alpha = params[:, 0], params[:, 1], params[:, 2]
+
+    standard_normal = tfd.Normal(loc=0.0, scale=1.0)
+    
+    z = (x - mu) / sigma
+    
+    pdf_normal = standard_normal.prob(z) # standard normal PDF (φ)
+    cdf_normal = standard_normal.cdf(alpha * z) # standard normal CDF (Φ)
+
+    skew_pdf = (2 / sigma) * pdf_normal * cdf_normal
+    
+    return skew_pdf
+
+@tf.keras.utils.register_keras_serializable()
+def skewnormal_pdf_loss(y_true, output):
+    pdf_skew_normal = skewnormal_pdf(y_true / 1000, output)
+    log_pdf_skew_normal = tf.math.log(pdf_skew_normal + 1e-12)
+
+    return -tf.reduce_mean(log_pdf_skew_normal)
+
+def normal_pdf(x, params):
+    mu, sigma = params[:, 0], params[:, 1]
+    normal_dist = tfd.Normal(loc=mu, scale=sigma)
+    pdf_normal = normal_dist.prob(x)
+
+    return pdf_normal
+
+@tf.keras.utils.register_keras_serializable()
+def normal_pdf_loss(y_true, output):
+    pdf_normal = normal_pdf(y_true / 1000, output)
+    log_pdf_normal = tf.math.log(pdf_normal + 1e-12)
+
+    return -tf.reduce_mean(log_pdf_normal)
+
+@tf.keras.utils.register_keras_serializable()
+def mu_loss(y_true, output):
+    mu = output[:, 0] * 1000
+    return tf.reduce_mean(tf.abs(y_true - mu))
+
+
+class MLPDistributionModel(tf.keras.Model):
+    def __init__(self, name='mlp_distribution_model', **kwargs):
+        super().__init__(name=name, **kwargs)
+
+        initializer = RandomNormal()
+        small_initializer = RandomNormal(1e-6)
+        dense1 = Dense(700, kernel_initializer=initializer, activation='selu')
+        dense2 = Dense(512, kernel_initializer=initializer, activation='selu')
+        dense3 = Dense(128, kernel_initializer=initializer, activation='selu')
+        
+        self.mean_output = Dense(1, kernel_initializer=initializer, activation='linear')
+        self.std_output = Dense(1, kernel_initializer=small_initializer, bias_initializer=tf.keras.initializers.Constant(1), activation='softplus')
+        self.skew_output = Dense(1, kernel_initializer=initializer, activation='tanh')
+
+        self.dense_layers = [dense1, dense2, dense3]
+    
+    def call(self, x):
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        mean_output = self.mean_output(x)
+        std_output = self.std_output(x) + 1e-5
+        skew_output = tf.zeros_like(std_output) # self.skew_output(x)
+
+        concat_output = tf.concat([mean_output, std_output, skew_output], axis=-1)
+
+        return concat_output
+    
 
     
 
@@ -556,15 +961,15 @@ class RNNModel(tf.keras.Model):
     def __init__(self, input_size, name='rnn_model'):
         super().__init__(name=name)
 
-        dense1 = tf.keras.layers.Dense(64, activation='relu')
-        dense2 = tf.keras.layers.Dense(16, activation='relu')
-        dense3 = tf.keras.layers.Dense(1, activation='relu')
+        dense1 = Dense(64, activation='relu')
+        dense2 = Dense(16, activation='relu')
+        dense3 = Dense(1, activation='relu')
 
-        self.rnn = tf.keras.layers.LSTM(64)
+        self.rnn = LSTM(64)
         self.dense_layers = [dense1, dense2, dense3]
 
-        self.optimizer = tf.keras.optimizers.Adam()
-        self.loss = tf.keras.losses.MeanAbsoluteError()
+        self.optimizer = Adam()
+        self.loss = MeanAbsoluteError()
 
     def call(self, x):
         x = self.rnn(x)
@@ -578,17 +983,17 @@ class ConvModel2(tf.keras.Model):
     def __init__(self, input_size, name='conv_model_2'):
         super().__init__(name=name)
 
-        dense1 = tf.keras.layers.Dense(256, activation='relu')
-        dense2 = tf.keras.layers.Dense(64, activation='relu')
-        dense3 = tf.keras.layers.Dense(16, activation='relu')
-        dense4 = tf.keras.layers.Dense(1, activation='relu')
+        dense1 = Dense(256, activation='relu')
+        dense2 = Dense(64, activation='relu')
+        dense3 = Dense(16, activation='relu')
+        dense4 = Dense(1, activation='relu')
 
-        self.conv_layer = tf.keras.layers.Convolution1D(filters=4, kernel_size=5, activation='relu')
-        self.flatten_layer = tf.keras.layers.Flatten()
+        self.conv_layer = Convolution1D(filters=4, kernel_size=5, activation='relu')
+        self.flatten_layer = Flatten()
         self.dense_layers = [dense1, dense2, dense3, dense4]
 
-        self.optimizer = tf.keras.optimizers.Adam()
-        self.loss = tf.keras.losses.MeanAbsoluteError()
+        self.optimizer = Adam()
+        self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
@@ -608,22 +1013,22 @@ class AttentionModel(tf.keras.Model):
         super().__init__(name=name)
 
         attention_size = 64
-        self.K = tf.keras.layers.Dense(attention_size)
-        self.Q = tf.keras.layers.Dense(attention_size)
-        self.V = tf.keras.layers.Dense(attention_size)
-        self.attention_layer = tf.keras.layers.Attention(use_scale=True)
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(64) for _ in range(2)]
-        self.output_layer = tf.keras.layers.Dense(1, activation='linear')
+        self.K = Dense(attention_size)
+        self.Q = Dense(attention_size)
+        self.V = Dense(attention_size)
+        self.attention_layer = Attention(use_scale=True)
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(64) for _ in range(2)]
+        self.output_layer = Dense(1, activation='linear')
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
         if classification: 
-            self.output_layer = tf.keras.layers.Dense(1, activation='sigmoid')
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.output_layer = Dense(1, activation='sigmoid')
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.loss = tf.keras.losses.MeanAbsoluteError()
+            self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
@@ -633,9 +1038,9 @@ class AttentionModel(tf.keras.Model):
         Q = self.Q(x)
         V = self.V(x)
         QV_attention_seq = self.attention_layer([Q, V])
-        Q_encoding = tf.keras.layers.GlobalAveragePooling1D()(Q)
-        QV_attention = tf.keras.layers.GlobalAveragePooling1D()(QV_attention_seq)
-        x = tf.keras.layers.Concatenate()([Q_encoding, QV_attention])
+        Q_encoding = GlobalAveragePooling1D()(Q)
+        QV_attention = GlobalAveragePooling1D()(QV_attention_seq)
+        x = Concatenate()([Q_encoding, QV_attention])
 
         for layer in self.dense_layers:
             x = layer(x)
@@ -650,48 +1055,48 @@ class ConvAttentionModel(tf.keras.Model):
         super().__init__(name=name)
 
         self.block1 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.MaxPool1D(pool_size=2),
-            tf.keras.layers.Attention()
+            Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
+            Activation('relu'),
+            BatchNormalization(),
+            MaxPool1D(pool_size=2),
+            Attention()
         ]
 
         self.block2 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.MaxPool1D(pool_size=2),
-            tf.keras.layers.Attention()
+            Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
+            Activation('relu'),
+            BatchNormalization(),
+            MaxPool1D(pool_size=2),
+            Attention()
         ]
 
         self.block3 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Attention()
+            Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
+            Activation('relu'),
+            BatchNormalization(),
+            Attention()
         ]
 
         self.block4 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.BatchNormalization()
+            Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
+            Activation('relu'),
+            BatchNormalization()
         ]
 
         self.blocks = [self.block1, self.block2, self.block3, self.block4]
 
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(128) for _ in range(2)]
-        self.output_layer = tf.keras.layers.Dense(1, activation='linear')
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(128) for _ in range(2)]
+        self.output_layer = Dense(1, activation='linear')
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
         if classification: 
-            self.output_layer = tf.keras.layers.Dense(1, activation='sigmoid')
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.output_layer = Dense(1, activation='sigmoid')
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.loss = tf.keras.losses.MeanAbsoluteError()
+            self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
@@ -700,7 +1105,7 @@ class ConvAttentionModel(tf.keras.Model):
     def call(self, x):
         for block in self.blocks:
             for layer in block:
-                if isinstance(layer, tf.keras.layers.Attention):
+                if isinstance(layer, Attention):
                     x = layer([x, x])
                 else:
                     x = layer(x)
@@ -720,45 +1125,45 @@ class ConvNoAttentionModel(tf.keras.Model):
         super().__init__(name=name)
 
         self.block1 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.MaxPool1D(pool_size=2)
+            Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
+            Activation('relu'),
+            BatchNormalization(),
+            MaxPool1D(pool_size=2)
         ]
 
         self.block2 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.MaxPool1D(pool_size=2)
+            Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
+            Activation('relu'),
+            BatchNormalization(),
+            MaxPool1D(pool_size=2)
         ]
 
         self.block3 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.BatchNormalization()
+            Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
+            Activation('relu'),
+            BatchNormalization()
         ]
 
         self.block4 = [
-            tf.keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.BatchNormalization()
+            Conv1D(filters=64, kernel_size=3, padding='same', kernel_initializer='he_normal'),
+            Activation('relu'),
+            BatchNormalization()
         ]
 
         self.blocks = [self.block1, self.block2, self.block3, self.block4]
 
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense(128) for _ in range(2)]
-        self.output_layer = tf.keras.layers.Dense(output_size, activation='linear')
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense(128) for _ in range(2)]
+        self.output_layer = Dense(output_size, activation='linear')
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
         if classification: 
-            self.output_layer = tf.keras.layers.Dense(output_size, activation='sigmoid')
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.output_layer = Dense(output_size, activation='sigmoid')
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.loss = tf.keras.losses.MeanAbsoluteError()
+            self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
@@ -787,20 +1192,20 @@ class BaselineModel(tf.keras.Model):
         self.input_size = input_size
         self.output_size = output_size
         
-        self.loss = tf.keras.losses.MeanAbsoluteError()
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.loss = MeanAbsoluteError()
+        self.optimizer = Adam()
 
     def call(self, x):
         return self.model(x)
 
     def build_model(activation='relu', learning_rate = 1e-3, input_shape=(700, 1)):
-        model = tf.keras.models.Sequential(name='mlp')
-        model.add(tf.keras.layers.Input(shape=input_shape))
-        model.add(tf.keras.layers.Flatten())
+        model = Sequential(name='mlp')
+        model.add(Input(shape=input_shape))
+        model.add(Flatten())
         initializer = tf.keras.initializers.HeNormal()
-        model.add(tf.keras.layers.Dense(1000, kernel_initializer = initializer, activation='relu'))
-        model.add(tf.keras.layers.Dense(1, activation='linear'))
-        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+        model.add(Dense(1000, kernel_initializer = initializer, activation='relu'))
+        model.add(Dense(1, activation='linear'))
+        optimizer = Adam(learning_rate=learning_rate)
         model.compile(loss='mean_absolute_error', optimizer=optimizer)#, metrics=[tf.keras.metrics.RootMeanSquaredError()])
         model.build((1,) + input_shape)
         return model
@@ -816,18 +1221,18 @@ class BaselineConvModel(tf.keras.Model):
         return self.model(x)
 
     def build_model(self, n_hidden=1, n_neurons=50, activation='relu', learning_rate=1e-3, input_shape=(700, 1)):
-        model = tf.keras.models.Sequential(name='two_layer_conv')
-        model.add(tf.keras.layers.InputLayer(input_shape=input_shape))
+        model = Sequential(name='two_layer_conv')
+        model.add(Input(input_shape=input_shape))
 
-        model.add(tf.keras.layers.Conv1D(filters=8, kernel_size=3, padding='same', activation=activation))
-        model.add(tf.keras.layers.Conv1D(filters=16, kernel_size=5, padding='same', activation=activation))
+        model.add(Conv1D(filters=8, kernel_size=3, padding='same', activation=activation))
+        model.add(Conv1D(filters=16, kernel_size=5, padding='same', activation=activation))
 
-        model.add(tf.keras.layers.Flatten())
+        model.add(Flatten())
         for layer in range(n_hidden):
-            model.add(tf.keras.layers.Dense(n_neurons, activation=activation))
+            model.add(Dense(n_neurons, activation=activation))
 
-        model.add(tf.keras.layers.Dense(1, activation='linear'))
-        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
+        model.add(Dense(1, activation='linear'))
+        optimizer = Adam(learning_rate=learning_rate)
         model.compile(loss='mean_absolute_error', optimizer=optimizer)
 
         return model
@@ -837,15 +1242,15 @@ class HybridModel(tf.keras.Model):
         super().__init__(name=name)
         self.MLP = MLPModel(output_size=32)
         self.CNN = build_vgg(length=input_size, width=64, name='vgg13', output_nums=32)
-        self.output_layer = tf.keras.layers.Dense(1, activation='sigmoid')
+        self.output_layer = Dense(1, activation='sigmoid')
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
         if classification: 
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.loss = tf.keras.losses.MeanAbsoluteError()
+            self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss, metrics=metrics)
@@ -869,20 +1274,20 @@ class Autoencoder(tf.keras.Model):
         name = name[:-1]
         super().__init__(name=name)
         
-        self.flatten_layer = tf.keras.layers.Flatten()
+        self.flatten_layer = Flatten()
 
         self.encoder = tf.keras.Sequential()
         for layer_size in encoder_layer_sizes[:-1]:
-            self.encoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
-        self.encoder.add(tf.keras.layers.Dense(encoder_layer_sizes[-1], activation='linear'))
+            self.encoder.add(Dense(layer_size, activation='leaky_relu'))
+        self.encoder.add(Dense(encoder_layer_sizes[-1], activation='linear'))
 
         self.decoder = tf.keras.Sequential()
         for layer_size in decoder_layer_sizes[:-1]:
-            self.decoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
-        self.decoder.add(tf.keras.layers.Dense(decoder_layer_sizes[-1], activation='linear'))
+            self.decoder.add(Dense(layer_size, activation='leaky_relu'))
+        self.decoder.add(Dense(decoder_layer_sizes[-1], activation='linear'))
         
-        self.loss = RelativeError() # tf.keras.losses.MeanSquaredError()
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.loss = RelativeError() # MeanSquaredError()
+        self.optimizer = Adam()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
@@ -911,20 +1316,20 @@ class VariationalAutoencoder(tf.keras.Model):
         name = name[:-1]
         super().__init__(name=name)
         
-        self.flatten_layer = tf.keras.layers.Flatten()
+        self.flatten_layer = Flatten()
 
         self.encoder = tf.keras.Sequential()
         for layer_size in encoder_layer_sizes[:-1]:
-            self.encoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
+            self.encoder.add(Dense(layer_size, activation='leaky_relu'))
         # Split the encoder output into two parameters: means and log variances
-        self.encoder.add(tf.keras.layers.Dense(encoder_layer_sizes[-1], activation='linear'))
+        self.encoder.add(Dense(encoder_layer_sizes[-1], activation='linear'))
 
         self.decoder = tf.keras.Sequential()
         for layer_size in decoder_layer_sizes[:-1]:
-            self.decoder.add(tf.keras.layers.Dense(layer_size, activation='leaky_relu'))
-        self.decoder.add(tf.keras.layers.Dense(decoder_layer_sizes[-1], activation='linear'))
+            self.decoder.add(Dense(layer_size, activation='leaky_relu'))
+        self.decoder.add(Dense(decoder_layer_sizes[-1], activation='linear'))
         
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
 
         if input_size:
             self.compile(optimizer=self.optimizer)
@@ -960,7 +1365,7 @@ class VariationalAutoencoder(tf.keras.Model):
         z_mean, z_log_var = self.encode(x)
         z = self.reparameterize(z_mean, z_log_var)
         x_recon = self.decode(z)
-        recon_loss = tf.reduce_mean(tf.keras.losses.binary_crossentropy(x, x_recon), axis=0)
+        recon_loss = tf.reduce_mean(binary_crossentropy(x, x_recon), axis=0)
         kl_loss = -0.5 * tf.reduce_mean(1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var), axis=0)
         print(recon_loss, kl_loss)
         total_loss = recon_loss + kl_loss

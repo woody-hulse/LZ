@@ -1,28 +1,34 @@
-import tensorflow as tf
+from tensorflow.keras.layers import Dense, Convolution2D, Flatten, BatchNormalization, Dropout, Layer, GRU
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.losses import BinaryCrossentropy, MeanAbsoluteError
+from tensorflow import math as tfm
+from tensorflow import expand_dims, unstack, stack, concat, gather
+from tensorflow.nn import gelu, l2_normalize
 import numpy as np
 
-class BaselineMLP(tf.keras.Model):
+class BaselineMLP(Model):
     def __init__(self, input_size=None, output_size=1, classification=False, name='baseline_mlp'):
         super().__init__(name=name)
 
-        self.dense_layers = [tf.keras.layers.Dense((5 - i) ** 3, activation='relu') for i in range(4)]
-        self.output_layer = tf.keras.layers.Dense(output_size, activation='linear')
+        self.dense_layers = [Dense((5 - i) ** 3, activation='relu') for i in range(4)]
+        self.output_layer = Dense(output_size, activation='linear')
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
         if classification: 
-            self.output_layer = tf.keras.layers.Dense(output_size, activation='sigmoid')
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.output_layer = Dense(output_size, activation='sigmoid')
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.loss = tf.keras.losses.MeanAbsoluteError()
+            self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
             self.build((None, input_size, 1))
     
     def call(self, x):
-        x = tf.keras.layers.Flatten()(x)
+        x = Flatten()(x)
         for layer in self.dense_layers:
             x = layer(x)
         
@@ -31,28 +37,28 @@ class BaselineMLP(tf.keras.Model):
         return x
     
 
-class BaselineConv(tf.keras.Model):
+class BaselineConv(Model):
     def __init__(self, input_size=None, output_size=1, classification=False, name='baseline_conv'):
         super().__init__(name=name)
 
         self.conv_layers = [
-            tf.keras.layers.Convolution2D(filters=32, kernel_size=5, padding='valid', activation='relu'),
-            tf.keras.layers.Convolution2D(filters=32, kernel_size=5, padding='valid', activation='relu'),
-            tf.keras.layers.Convolution2D(filters=64, kernel_size=3, padding='valid', activation='relu'),
-            tf.keras.layers.Convolution2D(filters=64, kernel_size=5, padding='valid', activation='relu')
+            Convolution2D(filters=32, kernel_size=5, padding='valid', activation='relu'),
+            Convolution2D(filters=32, kernel_size=5, padding='valid', activation='relu'),
+            Convolution2D(filters=64, kernel_size=3, padding='valid', activation='relu'),
+            Convolution2D(filters=64, kernel_size=5, padding='valid', activation='relu')
         ]
-        self.flatten_layer = tf.keras.layers.Flatten()
-        self.dense_layers = [tf.keras.layers.Dense((3 - i) ** 3, activation='relu') for i in range(4)]
-        self.output_layer = tf.keras.layers.Dense(output_size, activation='linear')
+        self.flatten_layer = Flatten()
+        self.dense_layers = [Dense((3 - i) ** 3, activation='relu') for i in range(4)]
+        self.output_layer = Dense(output_size, activation='linear')
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
         if classification: 
-            self.output_layer = tf.keras.layers.Dense(output_size, activation='sigmoid')
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.output_layer = Dense(output_size, activation='sigmoid')
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.loss = tf.keras.losses.MeanAbsoluteError()
+            self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
@@ -70,21 +76,21 @@ class BaselineConv(tf.keras.Model):
         return x
     
 
-class PODMLP(tf.keras.Model):
+class PODMLP(Model):
     def __init__(self, input_size=None, output_size=1, classification=False, name='pod_mlp'):
         super().__init__(name=name)
 
-        self.dense_layers = [tf.keras.layers.Dense((5 - i) ** 3, activation='relu') for i in range(4)]
-        self.output_layer = tf.keras.layers.Dense(output_size, activation='linear')
+        self.dense_layers = [Dense((5 - i) ** 3, activation='relu') for i in range(4)]
+        self.output_layer = Dense(output_size, activation='linear')
 
         metrics = []
-        self.optimizer = tf.keras.optimizers.Adam()
+        self.optimizer = Adam()
         if classification: 
-            self.output_layer = tf.keras.layers.Dense(output_size, activation='sigmoid')
-            self.loss = tf.keras.losses.BinaryCrossentropy()
+            self.output_layer = Dense(output_size, activation='sigmoid')
+            self.loss = BinaryCrossentropy()
             metrics.append('AUC')
         else: 
-            self.loss = tf.keras.losses.MeanAbsoluteError()
+            self.loss = MeanAbsoluteError()
 
         if input_size:
             self.compile(optimizer=self.optimizer, loss=self.loss)
@@ -118,7 +124,7 @@ class PODMLP(tf.keras.Model):
         return x
 
 
-class BaselineGNN(tf.keras.Model):
+class BaselineGNN(Model):
     def __init__(self, num_channels, output_size=1, classification=False, name='baseline_gnn'):
         super().__init__(name=name)
         self.num_channels = num_channels
@@ -126,10 +132,10 @@ class BaselineGNN(tf.keras.Model):
         self.graph_conv1 = GraphConvolution(64)
         self.graph_conv2 = GraphConvolution(32)
 
-        self.flatten = tf.keras.layers.Flatten()
+        self.flatten = Flatten()
 
-        self.dense1 = tf.keras.layers.Dense(units=128, activation='relu')
-        self.dense2 = tf.keras.layers.Dense(units=1, activation='sigmoid')
+        self.dense1 = Dense(units=128, activation='relu')
+        self.dense2 = Dense(units=1, activation='sigmoid')
 
     def call(self, inputs, adjacency_matrix):
         # Graph convolutional layers
@@ -150,14 +156,14 @@ def create_ffn(hidden_units, dropout_rate, name=None):
     fnn_layers = []
 
     for units in hidden_units:
-        fnn_layers.append(tf.keras.layers.BatchNormalization())
-        fnn_layers.append(tf.keras.layers.Dropout(dropout_rate))
-        fnn_layers.append(tf.keras.layers.Dense(units, activation=tf.nn.gelu))
+        fnn_layers.append(BatchNormalization())
+        fnn_layers.append(Dropout(dropout_rate))
+        fnn_layers.append(Dense(units, activation=gelu))
 
-    return tf.keras.keras.Sequential(fnn_layers, name=name)
+    return Sequential(fnn_layers, name=name)
 
 
-class GraphConvolution(tf.keras.layers.Layer):
+class GraphConvolution(Layer):
     def __init__(
         self,
         hidden_units,
@@ -176,7 +182,7 @@ class GraphConvolution(tf.keras.layers.Layer):
 
         self.ffn_prepare = create_ffn(hidden_units, dropout_rate)
         if self.combination_type == "gated":
-            self.update_fn = tf.keras.layers.GRU(
+            self.update_fn = GRU(
                 units=hidden_units,
                 activation="tanh",
                 recurrent_activation="sigmoid",
@@ -191,7 +197,7 @@ class GraphConvolution(tf.keras.layers.Layer):
         # node_repesentations shape is [num_edges, embedding_dim].
         messages = self.ffn_prepare(node_repesentations)
         if weights is not None:
-            messages = messages * tf.expand_dims(weights, -1)
+            messages = messages * expand_dims(weights, -1)
         return messages
 
     def aggregate(self, node_indices, neighbour_messages, node_repesentations):
@@ -200,15 +206,15 @@ class GraphConvolution(tf.keras.layers.Layer):
         # node_repesentations shape is [num_nodes, representation_dim]
         num_nodes = node_repesentations.shape[0]
         if self.aggregation_type == "sum":
-            aggregated_message = tf.math.unsorted_segment_sum(
+            aggregated_message = tfm.unsorted_segment_sum(
                 neighbour_messages, node_indices, num_segments=num_nodes
             )
         elif self.aggregation_type == "mean":
-            aggregated_message = tf.math.unsorted_segment_mean(
+            aggregated_message = tfm.unsorted_segment_mean(
                 neighbour_messages, node_indices, num_segments=num_nodes
             )
         elif self.aggregation_type == "max":
-            aggregated_message = tf.math.unsorted_segment_max(
+            aggregated_message = tfm.unsorted_segment_max(
                 neighbour_messages, node_indices, num_segments=num_nodes
             )
         else:
@@ -234,10 +240,10 @@ class GraphConvolution(tf.keras.layers.Layer):
         # Apply the processing function.
         node_embeddings = self.update_fn(h)
         if self.combination_type == "gru":
-            node_embeddings = tf.unstack(node_embeddings, axis=1)[-1]
+            node_embeddings = unstack(node_embeddings, axis=1)[-1]
 
         if self.normalize:
-            node_embeddings = tf.nn.l2_normalize(node_embeddings, axis=-1)
+            node_embeddings = l2_normalize(node_embeddings, axis=-1)
         return node_embeddings
 
     def call(self, inputs):
@@ -251,7 +257,7 @@ class GraphConvolution(tf.keras.layers.Layer):
         # Get node_indices (source) and neighbour_indices (target) from edges.
         node_indices, neighbour_indices = edges[0], edges[1]
         # neighbour_repesentations shape is [num_edges, representation_dim].
-        neighbour_repesentations = tf.gather(node_repesentations, neighbour_indices)
+        neighbour_repesentations = gather(node_repesentations, neighbour_indices)
 
         # Prepare the messages of the neighbours.
         neighbour_messages = self.prepare(neighbour_repesentations, edge_weights)

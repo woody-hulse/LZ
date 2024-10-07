@@ -32,7 +32,7 @@ Data filepaths
 # Typical single scatter (SS) events (100k)
 DS_FILE = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
 # Typical multi-scatter (MS) events (100k)
-DMS_FILE = '../dSSdMS/dMS_231202_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_5e4events_random_centered_above1000ns_batch00.npz'
+DMS_FILE = '../dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
 # Three batches of MS events (100k x 3)
 DMS_FILES = [
     '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
@@ -49,8 +49,10 @@ DMS_AT_CHANNEL_FILE = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafra
 DMS_CHANNEL_FILE = '../dSSdMS/dSS_2400417_gaussgass_700samplearea7000_areafrac0o5_1.0e+05events_random_centered_channel_withEAT.npz'
 # SS events with associated (binned) photon arrivals
 # DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400501_gaussgass_700samplearea7000_areafrac0o5_1.0e+04events_random_centered.npz'
-# DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400913_gaussgass_700samplearea7000_areafrac0o5_1.0e+04events_random_centered.npz'
-DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400917_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz'
+# DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400920_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz' # SIMPLE
+# DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400917_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz'
+# DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400921_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz' # NORMAL
+DSS_CHANNEL_PHOTON_FILE = '../dSSdMS/dSS_2400928_gaussgass_700samplearea7000_areafrac0o5_5.0e+04events_random_centered.npz' # RANDOM
 
 '''
 Training function for tensorflow model
@@ -69,21 +71,15 @@ Training function for tensorflow model
     return          : Model training history (metrics + losses)
 '''
 def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2, compile=False, summary=False, callbacks=False, learning_rate=0.001, metrics=[], plot_history=False):
-    debug_print(['training', model.name])
-
-    if compile:
-        model.compile(optimizer=model.optimizer, loss=model.loss, metrics=metrics)
-        model.build(X_train.shape)
     if summary:
         model.summary()
 
     c = []
     if callbacks:
-        # tf.keras.backend.set_value(model.optimizer.learning_rate, learning_rate)
         reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
         c.append(tf.keras.callbacks.EarlyStopping(patience=20))
         c.append(reduce_lr)
-
+    
     history = model.fit(
         X_train,
         y_train, 
@@ -92,10 +88,9 @@ def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2
         validation_split=validation_split, 
         verbose=1,
         callbacks=c
-        )
-    
+    )
+
     if plot_history:
-        # plt.plot(history.history['loss'], label='Loss')
         plt.plot(history.history['val_loss'], label='Validation loss')
         plt.title('Model loss')
         plt.ylabel('Loss')
@@ -129,7 +124,7 @@ def regression():
     Data preprocessing
     '''
     np.random.seed(42)
-    num_events = 50000
+    num_events = 100000
 
     def normalize(data):
         if np.linalg.norm(data) == 0:
@@ -146,7 +141,10 @@ def regression():
     AF    = np.array([None] * int(1e6)) # area fraction
     AT    = np.array([None] * int(1e6)) # arrival time
 
-    X, XC, PXC, Y, AT = load_pulse_dataset(DSS_CHANNEL_PHOTON_FILE)
+    # X, XC, PXC, Y, AT = load_pulse_dataset(DMS_FILE)
+    X, Y = load_pulse_dataset_old(DMS_FILE)
+    X_binned = np.array([X[i * 5000 : (i + 1) * 5000] for i in range(20)])
+    Y_binned = np.array([Y[i * 5000 : (i + 1) * 5000] for i in range(20)])
 
     # X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
     # X_XC_PXC_Y_AT_train, X_XC_PXC_Y_AT_test = train_test_split_all([X, XC, PXC, Y, AT], test_size=0.2)
@@ -165,18 +163,51 @@ def regression():
     np.random.shuffle(sample_indices)
     X_FLAT = np.reshape(X, (-1, 1))
     XC_FLAT = np.reshape(XC, (-1, 1))
-    PXC_FLAT = np.reshape(PXC, (-1, 1))
-    PX_FLAT = np.reshape(np.sum(PXC, axis=(1, 2)), (-1, 1))
-
+    # PXC_FLAT = np.reshape(PXC, (-1, 1))
+    # PX_FLAT = np.reshape(np.sum(PXC, axis=(1, 2)), (-1, 1))
     '''
     Experiments
     '''
     # print(np.sum(XC[0]), np.sum(AT[0]))
-    # print(np.sum(np.abs(XC[0] - AT[0])), np.sum(XC[0] - AT[0]))
+    # print(np.sum(np.abs(XC[
+    # 0] - AT[0])), np.sum(XC[0] - AT[0]))
     # plot_hit_pattern(XC[0])
     # graph_electron_arrival_prediction(XC, AT[:, :, -1], epochs=50)
     # graph_channel_electron_arrival_prediction(XC, AT, epochs=0)
-    graph_electron_arrival_prediction(XC, AT, epochs=10)
+    # graph_electron_arrival_prediction(np.array(PXC, np.float32), AT, epochs=30)
+    # PXC_sum = np.sum(PXC, axis=(1, 2))
+    # XC_sum = np.sum(XC, axis=(1, 2))
+    
+    # graph_electron_arrival_prediction(XC, AT, epochs=10)
+    # conv_graph_electron_arrival_prediction(XC, AT, epochs=25, dim3=False, savefigs=True)
+    # conv_graph_electron_arrival_prediction(XC, AT, epochs=6, dim3=True, savefigs=True)
+
+    # model = MLPModel()
+    # model.compile(optimizer=Adam(learning_rate=1e-4), loss=mean_log_error, metrics=[MeanAbsoluteError()])
+    # model.build((None, 700))
+    # train(model, X, Y, epochs=100, batch_size=512, validation_split=0.2, summary=True, plot_history=False)
+    # model.fit(X, Y, epochs=100, batch_size=512, validation_split=0.2, verbose=1)
+
+    # plot_histogram(X_binned, Y_binned, model)
+
+    conf_model = load('dist_conf_model')
+
+    # conf_model = MLPDistributionModel()
+    # conf_model.build((None, 700))
+    # conf_model.compile(optimizer=Adam(learning_rate=1e-3), loss=normal_pdf_loss, metrics=[eval_mae_loss])
+    # conf_model.compile(optimizer=Adam(learning_rate=1e-5), loss=skewnormal_pdf_loss, metrics=[mu_loss])
+
+    # train(conf_model, X, Y, epochs=100, batch_size=512, validation_split=0.2, summary=True, plot_history=False)
+    # save_model(conf_model, 'dist_conf_model')
+
+    # test = conf_model.predict(X[:100])
+    # mu, sigma, alpha = test[:, 0], test[:, 1], test[:, 2]
+    # print('mu =', mu)
+    # print('sigma =', sigma)
+
+    plot_pdf_gradient_histogram(X_binned, Y_binned, conf_model)
+    # plot_distribution_model_examples(X, Y, conf_model, num_examples=20)
+    # plot_pdf_gradient_histogram(X_binned, Y_binned, conf_model)
 
     # test_graph_network()
     
