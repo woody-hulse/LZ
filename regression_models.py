@@ -794,10 +794,9 @@ def mean_absolute_error(y_true, y_pred):
 def mean_square_root_error(y_true, y_pred):
     return tf.reduce_mean(tf.sqrt(tf.abs(y_true - y_pred)))
 
-POW = 0.8
-def mean_absolute_power_error(y_true, y_pred):
+def mean_absolute_power_error(y_true, y_pred, p=0.8):
     abs_diff = tf.abs(y_true - y_pred)
-    abs_diff_pow = tf.pow(abs_diff, POW)
+    abs_diff_pow = tf.pow(abs_diff, p)
     return tf.reduce_mean(abs_diff_pow)
 
 def mean_log_error(y_true, y_pred):
@@ -842,10 +841,10 @@ class MLPModel(tf.keras.Model):
         
         return x
     
-
+@tf.keras.utils.register_keras_serializable()
 def confidence_mae_loss(y_true, output):
-    confidence_exponent = 3
-    confidence_threshold = 100
+    confidence_exponent = 1.5
+    confidence_threshold = 130
 
     y_pred, confidence = output[:, 0], output[:, 1]
 
@@ -853,25 +852,31 @@ def confidence_mae_loss(y_true, output):
     return (1 - confidence) * x + confidence * tf.pow(x / confidence_threshold, confidence_exponent) * confidence_threshold
 
 
+@tf.keras.utils.register_keras_serializable()
 def eval_mae_loss(y_true, output):
     y_pred = output[:, 0]
     x = tf.abs(y_true - y_pred)
     return x
 
+@tf.keras.utils.register_keras_serializable()
+def eval_conf(y_true, output):
+    confidence = output[:, 1]
+    return tf.reduce_mean(confidence)
+
 
 class MLPConfidenceModel(tf.keras.Model):
-    def __init__(self, name='mlp_confidence_model'):
-        super().__init__(name=name)
+    def __init__(self, name='mlp_confidence_model', **kwargs):
+        super().__init__(name=name, **kwargs)
 
         initializer = HeNormal()
         dense1 = Dense(700, kernel_initializer=initializer, activation='selu')
         dense2 = Dense(512, kernel_initializer=initializer, activation='selu')
         dense3 = Dense(128, kernel_initializer=initializer, activation='selu')
+
+        self.dense_layers = [dense1, dense2, dense3]
         
         self.linear_ouput = Dense(1, kernel_initializer=initializer, activation='linear')
         self.confidence_output = Dense(1, kernel_initializer=initializer, activation='sigmoid')
-
-        self.dense_layers = [dense1, dense2, dense3]
 
     def call(self, x):
         for layer in self.dense_layers:
@@ -892,12 +897,53 @@ def skewnormal_pdf(x, params):
     
     z = (x - mu) / sigma
     
-    pdf_normal = standard_normal.prob(z) # standard normal PDF (φ)
-    cdf_normal = standard_normal.cdf(alpha * z) # standard normal CDF (Φ)
+    pdf_normal = standard_normal.prob(z)
+    cdf_normal = standard_normal.cdf(alpha * z)
 
     skew_pdf = (2 / sigma) * pdf_normal * cdf_normal
     
     return skew_pdf
+
+
+@tf.function
+def owens_t(h, a, num_points=1000):
+    def integrand(t):
+        return tf.exp(-0.5 * h ** 2 * (1 + t ** 2)) / (1 + t ** 2)
+    
+    t_values = tf.linspace(0.0, a, num_points)
+    
+    f_values = integrand(t_values)
+
+    delta_t = a / num_points
+    integral_approx = tf.reduce_sum(f_values) * delta_t
+    
+    result = integral_approx / (2 * np.pi)
+    
+    return result
+
+
+def skewnormal_pdf_nonnegative(x, params):
+    # Eliminate negative values from PDF, renormalize
+
+    mu, sigma, alpha = params[:, 0], params[:, 1], params[:, 2]
+
+    standard_normal = tfd.Normal(loc=0.0, scale=1.0)
+
+    z = (x - mu) / sigma
+    z_0 = -mu / sigma
+
+    pdf_normal = standard_normal.prob(z) # standard normal PDF (φ)
+    cdf_normal = standard_normal.cdf(alpha * z) # standard normal CDF (Φ)
+
+    pdf_normal_0 = standard_normal.prob(z_0)
+    cdf_normal_0 = standard_normal.cdf(alpha * z_0)
+
+    skew_pdf = (2 / sigma) * pdf_normal * cdf_normal
+    skew_pdf_0 = (2 / sigma) * pdf_normal_0 * cdf_normal_0
+
+    return skew_pdf, skew_pdf_0
+
+
 
 @tf.keras.utils.register_keras_serializable()
 def skewnormal_pdf_loss(y_true, output):
@@ -906,12 +952,34 @@ def skewnormal_pdf_loss(y_true, output):
 
     return -tf.reduce_mean(log_pdf_skew_normal)
 
+@tf.keras.utils.register_keras_serializable()
+def skewnormal_pdf_loss_penalty(y_true, output):
+    pdf_skew_normal, pdf_skew_normal_0 = skewnormal_pdf_nonnegative(y_true / 1000, output)
+    log_pdf_skew_normal = tf.math.log(pdf_skew_normal + 1e-12)
+
+    return -tf.reduce_mean(log_pdf_skew_normal) + tf.reduce_mean(pdf_skew_normal_0)
+
 def normal_pdf(x, params):
     mu, sigma = params[:, 0], params[:, 1]
     normal_dist = tfd.Normal(loc=mu, scale=sigma)
     pdf_normal = normal_dist.prob(x)
 
     return pdf_normal
+
+def normal_cdf(x, params):
+    mu, sigma = params[:, 0], params[:, 1]
+    normal_dist = tfd.Normal(loc=mu, scale=sigma)
+    cdf_normal = normal_dist.cdf(x)
+
+    return cdf_normal
+
+def nonnegative_normal_pdf(x, params):
+    mu, sigma = params[:, 0], params[:, 1]
+    normal_dist = tfd.Normal(loc=mu, scale=sigma)
+    pdf_normal = normal_dist.prob(x)
+    cdf_normal = normal_dist.cdf(0)
+
+    return pdf_normal / (1 - cdf_normal + 1e-4)
 
 @tf.keras.utils.register_keras_serializable()
 def normal_pdf_loss(y_true, output):
@@ -921,24 +989,36 @@ def normal_pdf_loss(y_true, output):
     return -tf.reduce_mean(log_pdf_normal)
 
 @tf.keras.utils.register_keras_serializable()
+def nonnegative_normal_pdf_loss(y_true, output):
+    normalized_pdf_normal = nonnegative_normal_pdf(y_true / 1000, output)
+    log_pdf_normal = tf.math.log(normalized_pdf_normal + 1e-12)
+
+    return -tf.reduce_mean(log_pdf_normal)
+
+@tf.keras.utils.register_keras_serializable()
 def mu_loss(y_true, output):
     mu = output[:, 0] * 1000
     return tf.reduce_mean(tf.abs(y_true - mu))
+
+@tf.keras.utils.register_keras_serializable()
+def skew_mu_loss(y_true, output):
+    loc, scale, alpha = output[:, 0], output[:, 1], output[:, 2]
+    mu = loc + scale * alpha * np.sqrt(2 / np.pi)
+    return tf.reduce_mean(tf.abs(y_true - mu * 1000))
 
 
 class MLPDistributionModel(tf.keras.Model):
     def __init__(self, name='mlp_distribution_model', **kwargs):
         super().__init__(name=name, **kwargs)
-
+        self.output_size = 3
         initializer = RandomNormal()
-        small_initializer = RandomNormal(1e-6)
         dense1 = Dense(700, kernel_initializer=initializer, activation='selu')
         dense2 = Dense(512, kernel_initializer=initializer, activation='selu')
         dense3 = Dense(128, kernel_initializer=initializer, activation='selu')
         
         self.mean_output = Dense(1, kernel_initializer=initializer, activation='linear')
-        self.std_output = Dense(1, kernel_initializer=small_initializer, bias_initializer=tf.keras.initializers.Constant(1), activation='softplus')
-        self.skew_output = Dense(1, kernel_initializer=initializer, activation='tanh')
+        self.std_output = Dense(1, kernel_initializer=initializer, activation='softplus')
+        self.skew_output = Dense(1, kernel_initializer=initializer, activation='linear')
 
         self.dense_layers = [dense1, dense2, dense3]
     
@@ -948,12 +1028,66 @@ class MLPDistributionModel(tf.keras.Model):
         
         mean_output = self.mean_output(x)
         std_output = self.std_output(x) + 1e-5
-        skew_output = tf.zeros_like(std_output) # self.skew_output(x)
+        skew_output = self.skew_output(x)
 
         concat_output = tf.concat([mean_output, std_output, skew_output], axis=-1)
 
         return concat_output
     
+
+class MLPNormalDistributionModel(tf.keras.Model):
+    def __init__(self, name='mlp_normal_distribution_model', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.output_size = 2
+        initializer = RandomNormal()
+        dense1 = Dense(700, kernel_initializer=initializer, activation='selu')
+        dense2 = Dense(512, kernel_initializer=initializer, activation='selu')
+        dense3 = Dense(128, kernel_initializer=initializer, activation='selu')
+        
+        self.mean_output = Dense(1, kernel_initializer=initializer, activation='linear')
+        self.std_output = Dense(1, kernel_initializer=initializer, activation='softplus')
+
+        self.dense_layers = [dense1, dense2, dense3]
+    
+    def call(self, x):
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        mean_output = self.mean_output(x)
+        std_output = self.std_output(x) + 1e-5
+
+        concat_output = tf.concat([mean_output, std_output], axis=-1)
+
+        return concat_output
+    
+def identity_pdf(_, params):
+    return params[0] * 1000
+
+class MLPCustomDistributionModel(tf.keras.Model):
+    def __init__(self, name='mlp_normal_distribution_model', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.output_size = 1000
+        initializer = RandomNormal()
+        dense1 = Dense(700, kernel_initializer=initializer, activation='selu')
+        dense2 = Dense(512, kernel_initializer=initializer, activation='selu')
+        dense3 = Dense(128, kernel_initializer=initializer, activation='selu')
+        dense4 = Dense(1000, kernel_initializer=initializer, activation='softmax')
+
+        dropout1 = Dropout(0.4)
+        dropout2 = Dropout(0.4)
+        dropout3 = Dropout(0.4)
+
+        self.dense_layers = [dense1, dense2, dense3, dense4]
+        self.dropout_layers = [dropout1, dropout2, dropout3]
+    
+    def call(self, x):
+        for dense_layer, dropout_layer in zip(self.dense_layers[:-1], self.dropout_layers):
+            x = dense_layer(x)
+            x = dropout_layer(x)
+        
+        x = self.dense_layers[-1](x)
+        
+        return x
 
     
 

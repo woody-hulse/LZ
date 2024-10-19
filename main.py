@@ -33,6 +33,9 @@ Data filepaths
 DS_FILE = '../dSSdMS/dSS_230918_gaussgas_700sample_area7000_1e5events_random_centered.npz'
 # Typical multi-scatter (MS) events (100k)
 DMS_FILE = '../dSSdMS/dMS_231011_gaussgas_700sample_area7000_areafrac0o5_deltamuinterval50ns_5000each_1e5events_random_centered_batch10.npz'
+# Continuous multi-scatter (MS) events (100k)
+DMS_CONTINUOUS_FILE = '../dSSdMS/dMS_240926_gaussgas_700sample_area7000_areafrac0o5_randomdeltamu_1e5events_centered_batch00.npz'
+
 # Three batches of MS events (100k x 3)
 DMS_FILES = [
     '../dSSdMS/dMS_240306_gaussgas_700sample_148electrons_randomareafrac_deltamuinterval50ns_5000each_1e5events_random_jitter100ns_batch00.npz',
@@ -91,6 +94,7 @@ def train(model, X_train, y_train, epochs=5, batch_size=32, validation_split=0.2
     )
 
     if plot_history:
+        plt.plot(history.history['loss'], label='Training loss')
         plt.plot(history.history['val_loss'], label='Validation loss')
         plt.title('Model loss')
         plt.ylabel('Loss')
@@ -143,6 +147,7 @@ def regression():
 
     # X, XC, PXC, Y, AT = load_pulse_dataset(DMS_FILE)
     X, Y = load_pulse_dataset_old(DMS_FILE)
+    X_continuous, Y_continuous = load_pulse_dataset_old(DMS_CONTINUOUS_FILE)
     X_binned = np.array([X[i * 5000 : (i + 1) * 5000] for i in range(20)])
     Y_binned = np.array([Y[i * 5000 : (i + 1) * 5000] for i in range(20)])
 
@@ -157,6 +162,9 @@ def regression():
     Y       = Y[event_indices][:num_events]     # Delta mu for MS, 0 for SS
     AT      = AT[event_indices][:num_events]    # Electron arrival tiimes
     AF      = AF[event_indices][:num_events]    # Area fraction of MS pulse
+
+    X_continuous = X_continuous[event_indices][:num_events]
+    Y_continuous = Y_continuous[event_indices][:num_events]
 
     num_samples = 1000000
     sample_indices = np.arange(num_samples)
@@ -190,26 +198,83 @@ def regression():
 
     # plot_histogram(X_binned, Y_binned, model)
 
-    conf_model = load('dist_conf_model')
+
+    
+    conf_model = load('skew_dist_conf_model')
+
+    # conf_model = MLPNormalDistributionModel()
+    # conf_model.build((None, 700))
+    conf_model.compile(optimizer=Adam(learning_rate=3e-6), loss=skewnormal_pdf_loss_penalty, metrics=[mu_loss, skew_mu_loss])
+
+    train(conf_model, X_continuous, Y_continuous, epochs=50, batch_size=512, validation_split=0.2, summary=True, plot_history=True)
+    # save_model(conf_model, 'pos_dist_conf_model')
+
+    # plot_prediction_percentile_distribution_normal(X_continuous, Y_continuous, conf_model, skewnormal_pdf)
+
+    # plot_prediction_z_distribution_normal(X, Y, conf_model, normal_pdf)
+
+    plot_distribution_histogram(X_binned, Y_binned, conf_model, pdf_func=normal_pdf)
+    # plot_distribution_model_examples(X, Y, conf_model, pdf_func=normal_pdf, num_examples=20)
+    # plot_pdf_gradient_histogram(X_binned, Y_binned, conf_model)
+    
+
+
+    
+    # conf_model = load('skew_dist_conf_model')
+
+    # plot_prediction_percentile_distribution_normal(X, Y, conf_model, skewnormal_pdf)
 
     # conf_model = MLPDistributionModel()
     # conf_model.build((None, 700))
-    # conf_model.compile(optimizer=Adam(learning_rate=1e-3), loss=normal_pdf_loss, metrics=[eval_mae_loss])
-    # conf_model.compile(optimizer=Adam(learning_rate=1e-5), loss=skewnormal_pdf_loss, metrics=[mu_loss])
+    # conf_model.compile(optimizer=Adam(learning_rate=5e-7), loss=skewnormal_pdf_loss, metrics=[mu_loss, skew_mu_loss])
 
-    # train(conf_model, X, Y, epochs=100, batch_size=512, validation_split=0.2, summary=True, plot_history=False)
-    # save_model(conf_model, 'dist_conf_model')
+    # train(conf_model, X, Y, epochs=100, batch_size=512, validation_split=0.2, summary=True, plot_history=True)
+    # save_model(conf_model, 'skew_dist_conf_model')
 
-    # test = conf_model.predict(X[:100])
-    # mu, sigma, alpha = test[:, 0], test[:, 1], test[:, 2]
-    # print('mu =', mu)
-    # print('sigma =', sigma)
+    # plot_prediction_z_distribution_skewnormal(X, Y, conf_model, skewnormal_pdf)
 
-    plot_pdf_gradient_histogram(X_binned, Y_binned, conf_model)
-    # plot_distribution_model_examples(X, Y, conf_model, num_examples=20)
+    # plot_distribution_histogram(X_binned, Y_binned, conf_model, pdf_func=skewnormal_pdf)
+    # plot_distribution_model_examples(X, Y, conf_model, pdf_func=skewnormal_pdf, num_examples=20)
     # plot_pdf_gradient_histogram(X_binned, Y_binned, conf_model)
+    
+    # custom_conf_model = MLPCustomDistributionModel()
+
+    # custom_conf_model = load('custom_conf_model')
+
+    # custom_conf_model.compile(optimizer=Adam(learning_rate=1e-4), loss=tf.keras.losses.SparseCategoricalCrossentropy())
+    # train(custom_conf_model, X_continuous, np.array(Y_continuous, dtype=np.int32), epochs=50, batch_size=512, validation_split=0.2, summary=True, plot_history=False)
+
+    # save_model(custom_conf_model, 'custom_conf_model')
+
+    # plot_prediction_percentile_distribution_normal(X_continuous, Y_continuous, custom_conf_model, identity_pdf)
+
+    '''
+
+    custom_conf_model.build((None, 700))
+    custom_conf_model.compile(optimizer=Adam(learning_rate=1e-4), loss=tf.keras.losses.SparseCategoricalCrossentropy())
+    train(custom_conf_model, X_continuous, np.array(Y_continuous, dtype=np.int32), epochs=100, batch_size=512, validation_split=0.2, summary=True, plot_history=False)
+
+    save_model(custom_conf_model, 'custom_conf_model')
+
+    plot_distribution_histogram(X_binned, Y_binned, custom_conf_model, pdf_func=identity_pdf)
+    plot_distribution_model_examples(X, Y, custom_conf_model, pdf_func=identity_pdf, num_examples=20)
+    # plot_pdf_gradient_histogram(X_binned, Y_binned, conf_model)
+    '''
+
 
     # test_graph_network()
+
+    # conf_model = load('bin_conf_model')
+    # conf_model = MLPConfidenceModel()
+    # conf_model.build((None, 700))
+    # conf_model.compile(optimizer=Adam(learning_rate=1e-5), loss=confidence_mae_loss, metrics=[eval_mae_loss, eval_conf])
+
+    # train(conf_model, X, Y, epochs=100, batch_size=512, validation_split=0.2, summary=True, plot_history=False)
+
+    # save_model(conf_model, 'bin_conf_model')
+
+    # plot_confidence_gradient_histogram(X_binned, Y_binned, conf_model)
+    # plot_confidence_histogram(X_binned, Y_binned, conf_model)
     
 
 def main():

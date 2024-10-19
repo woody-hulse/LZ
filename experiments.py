@@ -244,7 +244,7 @@ def plot_confidence_gradient_histogram(X_binned, Y_binned, model):
         interval = 10
         for i in range(0, interval, 1):
             conf_thresh = i / interval
-            Y_hat_confident = Y_hat[Y_hat_confidence > conf_thresh]
+            Y_hat_confident = Y_hat[Y_hat_confidence >= conf_thresh]
             color = cm.viridis(conf_thresh)
             ax[row][col].hist(Y_hat_confident, bins=100, color=color, edgecolor=color, label=f'Predicted delta mu (confidence ≥ {conf_thresh})')
 
@@ -272,28 +272,29 @@ def plot_pdf_gradient_histogram(X_binned, Y_binned, model):
         X = X_binned[i]
         y = Y_binned[i][0]
         Y_output = model(X)
-        Y_hat_mu, Y_hat_sigma, Y_hat_alpha = Y_output[:, 0] * 1000, Y_output[:, 1] * 1000, Y_output[:, 2]
+        Y_hat_mu, Y_hat_sigma = Y_output[:, 0] * 1000, Y_output[:, 1] * 1000
 
         interval = 20
         for i in range(interval):
             conf_thresh = i / interval
-            Y_hat_confident = Y_hat_mu[Y_hat_sigma / 100 > conf_thresh]
+            Y_hat_confident = Y_hat_mu[Y_hat_sigma / 100 >= conf_thresh]
             color = cm.viridis(conf_thresh)
             ax[row][col].hist(Y_hat_confident, bins=100, color=color, edgecolor=color, label=f'Predicted delta mu ≥ {conf_thresh})')
 
         ax[row][col].axvline(y, color='red', label='True delta mu', linestyle='dashed')
         ax[row][col].set_xlim(-10, 1010)
+        ax[row][col].set_ylim(-0.1, 250)
         ax[row][col].set_title(f'Δμ = {y}ns')
     
     ax[0][0].set_xlabel('Predicted delta mu')
-    ax[0][0].set_ylabel('Count')
+    ax[0][0].set_ylabel('PDF')
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     fig.suptitle(f'Delta mu predictions for each godnumber delta mu', fontsize=13)
     plt.show()
 
 
-def plot_pdf_gradient_histogram(X_binned, Y_binned, model):
+def plot_distribution_histogram(X_binned, Y_binned, model, pdf_func):
     num_bins = X_binned.shape[0]
     assert num_bins == 20
 
@@ -305,15 +306,15 @@ def plot_pdf_gradient_histogram(X_binned, Y_binned, model):
         X = X_binned[i]
         y = Y_binned[i][0]
         Y_output = model(X)
-        Y_hat_mu, Y_hat_sigma, Y_hat_alpha = Y_output[:, 0] * 1000, Y_output[:, 1] * 1000, Y_output[:, 2]
         
-        X = np.array([X] * Y_output.shape[0])
-        Y_hat = skewnormal_pdf(X / 1000, Y_output)
-        for x, y in zip(X[:10], Y_hat[:10]):
-            ax[row][col].fill_between(x, y, color='blue', alpha=0.01)
-
+        for y_output in Y_output[:200]:
+            arange = np.arange(0, 1000, 1)
+            y_hat = pdf_func(arange / 1000, np.expand_dims(y_output, axis=0))
+            ax[row][col].fill_between(arange, y_hat, color='blue', alpha=0.01)
+        
         ax[row][col].axvline(y, color='red', label='True delta mu', linestyle='dashed')
         ax[row][col].set_xlim(-10, 1010)
+        ax[row][col].set_ylim(-0.1, 12)
         ax[row][col].set_title(f'Δμ = {y}ns')
     
     ax[0][0].set_xlabel('Predicted delta mu')
@@ -325,12 +326,12 @@ def plot_pdf_gradient_histogram(X_binned, Y_binned, model):
 
 
 
-def plot_distribution_model_examples(X, Y, model, num_examples=10):
+def plot_distribution_model_examples(X, Y, model, pdf_func, num_examples=10):
     for sample, dmu in zip(X[:num_examples], Y[:num_examples]):
         output = model(np.expand_dims(sample, axis=0))
-        y_hat_mu, y_hat_sigma, y_hat_alpha = output[0, 0] * 1000, output[0, 1] * 1000, output[0, 2]
+        y_hat_mu = output[0, 0] * 1000
         x = np.arange(0, 1000, 1)
-        y = skewnormal_pdf(x / 1000, output)
+        y = pdf_func(x / 1000, output)
 
         plt.tight_layout()
         plt.title(f'Predicted delta mu: {y_hat_mu:.2f}ns, True delta mu: {dmu:.2f}ns')
@@ -343,6 +344,82 @@ def plot_distribution_model_examples(X, Y, model, num_examples=10):
         plt.ylim(0, 10)
         plt.legend()
         plt.show()
+
+
+def plot_prediction_z_distribution_normal(X, Y, model, pdf_func):
+    Y_hat = np.zeros((Y.shape[0], model.output_size))
+    for i in tqdm(range(0, X.shape[0], 512)):
+        Y_hat[i:i+512] = model(X[i:i+512])
+    
+    Y_hat_mu = Y_hat[:, 0] * 1000
+    Y_hat_sigma = Y_hat[:, 1] * 1000
+
+    Y_z = (Y - Y_hat_mu) / Y_hat_sigma
+    Y_z = Y_z[np.abs(Y_z) < 5]
+
+    plt.figure(figsize=(8, 6))
+    plt.tight_layout()
+    plt.title('Z scores of delta mu in predicted normal distributions')
+    plt.hist(Y_z, bins=100, color='blue', edgecolor='blue', label='z-scores')
+    plt.plot(np.arange(-5, 5, 0.1), pdf_func(np.arange(-5, 5, 0.1), np.array([[0., 1., 0.]])) * Y.shape[0] * 0.095, color='red', label='Target distribution')
+    plt.xlabel('z-score')
+    plt.ylabel('Count')
+    plt.xlim(-4, 4)
+    plt.legend()
+    plt.show()
+
+
+def plot_prediction_percentile_distribution_normal(X, Y, model, pdf_func):
+    Y_hat = np.zeros((Y.shape[0], model.output_size))
+    for i in tqdm(range(0, X.shape[0], 512)):
+        Y_hat[i:i+512] = model(X[i:i+512])
+    
+    Y_hat_pdfs = np.zeros((Y.shape[0], 1000))
+    for i in tqdm(range(Y.shape[0])):
+        Y_hat_pdfs[i] = pdf_func(np.arange(0, 1, 0.001), np.expand_dims(Y_hat[i], axis=0))
+    Y_hat_cdfs = np.cumsum(Y_hat_pdfs, axis=1)
+    Y_percentiles = np.array([Y_hat_cdfs[i][int(mu)] for i, mu in enumerate(Y)]) / 1000
+    
+    bins = 100
+    plt.figure(figsize=(8, 6))
+    plt.tight_layout()
+    plt.title('Percentiles of delta mu in predicted nonnegative normal distributions')
+    plt.hist(Y_percentiles, bins=bins, color='blue', edgecolor='blue', label='Percentiles')
+    plt.axhline(Y.shape[0] / bins, color='red', label='Target distribution')
+    plt.xlabel('Percentile')
+    plt.ylabel('Count')
+    plt.xlim(0, 1)
+    plt.legend()
+    plt.show()
+    
+
+
+
+def plot_prediction_z_distribution_skewnormal(X, Y, model, pdf_func):
+    Y_hat = np.zeros((Y.shape[0], model.output_size))
+    for i in tqdm(range(0, X.shape[0], 512)):
+        Y_hat[i:i+512] = model(X[i:i+512])
+    
+    Y_hat_loc = Y_hat[:, 0] * 1000
+    Y_hat_scale = Y_hat[:, 1] * 1000
+    Y_hat_alpha = Y_hat[:, 2]
+
+    Y_hat_mu = Y_hat_loc + Y_hat_scale * Y_hat_alpha * np.sqrt(2 / np.pi)
+    Y_hat_sigma = np.sqrt(Y_hat_scale ** 2 * (1 - 2 * Y_hat_alpha ** 2 / np.pi))
+
+    Y_z = (Y - Y_hat_mu) / Y_hat_sigma
+    Y_z = Y_z[np.abs(Y_z) < 5]
+
+    plt.figure(figsize=(8, 6))
+    plt.tight_layout()
+    plt.title('Z scores of delta mu in predicted skew normal distributions')
+    plt.hist(Y_z, bins=100, color='blue', edgecolor='blue', label='z-scores')
+    plt.plot(np.arange(-5, 5, 0.1), pdf_func(np.arange(-5, 5, 0.1), np.array([[0., 1., 0.]])) * Y.shape[0] * 0.095, color='red', label='Target distribution')
+    plt.xlabel('z-score')
+    plt.ylabel('Count')
+    plt.xlim(-4, 4)
+    plt.legend()
+    plt.show()
 
 
 
