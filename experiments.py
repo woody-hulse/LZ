@@ -12,7 +12,7 @@ sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Ti
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import normalize
 from sklearn.metrics import roc_auc_score
-from sklearn.metrics import roc_curve
+from sklearn.metrics import roc_curve, auc
 from scipy.stats import norm
 import matplotlib.cm as cm
 
@@ -93,8 +93,11 @@ Generates a linearity plot based on model and data
 
     return          : None
 '''
-def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1000, title=''):
+def linearity_plot(data, preds, delta_mu=50, num_delta_mu=20, num_samples=1000, title=''):
     def plot(x, y, err_down, err_up, color='blue', marker='o', title=None):
+        fig = plt.figure(dpi=200)
+        err_down = np.maximum(err_down, 0)
+        err_up = np.maximum(err_up, 0)
         plt.plot(x, x, color='black', label='y = x Line')
         plt.errorbar(x, y, yerr=(err_down, err_up), label='\u0394\u03bc Prediction', color=color, marker=marker, linestyle='None')
 
@@ -108,32 +111,20 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
         plt.clf()
     
     
-    if not data:
-        dMS = DS(DMS_NAME)
-        data_indices = np.array([i for i in range(len(dMS.ULvalues))])
-        np.random.shuffle(data_indices)
-        X = dMS.DSdata[data_indices]
-        X = np.concatenate([np.expand_dims(normalize(dist), 0) for dist in X], axis=0)
-        Y = dMS.ULvalues[data_indices]
-        Y = Y[:, 1]
-    else:
-        X, Y = data
-        X = np.squeeze(X)
+    X, Y = data
+    X = np.squeeze(X)
 
     counts = np.zeros(num_delta_mu)
-    X_delta_mu = np.empty((num_delta_mu, num_samples))
-
-    if data:
-        X_delta_mu = np.empty([num_delta_mu, num_samples] + list(X.shape[1:]))
+    X_delta_mu = np.empty([num_delta_mu, num_samples] + list(X.shape[1:]))
+    predictions = np.empty([num_delta_mu, num_samples])
 
     for i in tqdm(range(len(X))):
         index = int(Y[i] // delta_mu)
         if counts[index] >= num_samples: continue
         else:
             X_delta_mu[index, int(counts[index])] = X[i]
+            predictions[index, int(counts[index])] = preds[i]
             counts[index] += 1
-
-    predictions = np.zeros((num_delta_mu, num_samples))
 
     prediction_means = np.zeros(num_delta_mu)
     prediction_left_stds = np.zeros(num_delta_mu)
@@ -144,8 +135,6 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
     prediction_84 = np.zeros(num_delta_mu)
 
     for i in tqdm(range(num_delta_mu)):
-        samples = np.expand_dims(X_delta_mu[i], axis=-1)
-        predictions[i][:] = np.squeeze(model(samples))
         prediction_means[i] = np.mean(predictions[i])
         prediction_left_stds[i] = np.std(predictions[i][predictions[i] < prediction_means[i]])
         prediction_right_stds[i] = np.std(predictions[i][predictions[i] >= prediction_means[i]])
@@ -160,7 +149,85 @@ def linearity_plot(model, data=None, delta_mu=50, num_delta_mu=20, num_samples=1
         
     plot(np.arange(0, delta_mu * num_delta_mu, delta_mu), 
          prediction_medians, prediction_16, prediction_84, 
-         title=model.name + ' model linearity plot' + title)
+         title=title + 'linearity plot')
+    
+
+
+def linearity_plot_2(X_binned, model, title='', num_bins=20, max_delta_mu=1000, output_func=lambda x: x):
+    def plot(x, y, err_down, err_up, color='blue', marker='o', title=None):
+        plt.plot(x, x, color='black', label='y = x Line')
+        plt.errorbar(x, y, yerr=(err_down, err_up), label='\u0394\u03bc prediction', color=color, marker=marker, linestyle='None')
+
+        plt.xlabel('True \u0394\u03bc [ns]')
+        plt.ylabel('Median predicted \u0394\u03bc [ns]')
+        plt.title(title)
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig('figs/' + title)
+        plt.clf()
+    
+    predictions = np.zeros((X_binned.shape[0], X_binned.shape[1]))
+    prediction_medians = np.zeros(X_binned.shape[0])
+    prediction_16 = np.zeros(X_binned.shape[0])
+    prediction_84 = np.zeros(X_binned.shape[0])
+    for i in range(num_bins):
+        predictions[i][:] = output_func(model(X_binned[i]))
+
+        prediction_medians[i] = np.median(predictions[i])
+        hist, bin_edges = np.histogram(predictions[i], bins=100, density=True)
+        cumulative_distribution = np.cumsum(hist * np.diff(bin_edges))
+        total_area = cumulative_distribution[-1]
+
+        prediction_16[i] = prediction_medians[i] - bin_edges[np.where(cumulative_distribution >= 0.16 * total_area)[0][0]]
+        prediction_84[i] = bin_edges[np.where(cumulative_distribution >= 0.84 * total_area)[0][0]] - prediction_medians[i]
+
+        print(prediction_16[i], prediction_84[i])
+
+    plot(np.arange(0, max_delta_mu, max_delta_mu / num_bins), prediction_medians, prediction_16, prediction_84, title=model.name + ' model linearity plot' + title)
+
+
+def plot_mae_vs_dmu(X_binned, Y_binned, models, mu_funcs):
+    num_bins = X_binned.shape[0]
+
+    for model, mu_func in zip(models, mu_funcs):
+        mae = np.zeros(num_bins)
+        for i in range(num_bins):
+            X = X_binned[i]
+            Y = Y_binned[i]
+            Y_hat = mu_func(model(X))
+            mae[i] = tf.keras.losses.MeanAbsoluteError()(Y, Y_hat).numpy()
+        plt.plot(np.arange(0, 1000, 50), mae, label=model.name)
+    
+    plt.tight_layout()
+    plt.xlabel('Δμ [ns]')
+    plt.ylabel('Mean absolute error')
+    plt.title('Mean absolute error vs Δμ')
+    plt.legend()
+    plt.show()
+
+
+def roc(X, Y, models):
+    plt.figure()
+    plt.tight_layout()
+    for model in models:
+        try:
+            Y_hat = model(X)[:, 3]
+        except:
+            Y_hat = model(X)[:, 0]
+        Y = Y.flatten()
+
+        fpr, tpr, thresholds = roc_curve(Y, Y_hat)
+        roc_auc = auc(fpr, tpr)
+
+        plt.plot(fpr, tpr, label=f'{model.name} ROC curve (AUC = {roc_auc:.2f})')
+    
+    plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
+    plt.xlabel('FP rate')
+    plt.ylabel('TP rate')
+    plt.title('ROC Curve')
+    plt.legend(loc="lower right")
+    plt.show()
 
 
 '''
@@ -272,7 +339,7 @@ def plot_pdf_gradient_histogram(X_binned, Y_binned, model):
         X = X_binned[i]
         y = Y_binned[i][0]
         Y_output = model(X)
-        Y_hat_mu, Y_hat_sigma = Y_output[:, 0] * 1000, Y_output[:, 1] * 1000
+        Y_hat_mu, Y_hat_sigma = Y_output[:, 0] * 700, Y_output[:, 1] * 700
 
         interval = 20
         for i in range(interval):
@@ -308,8 +375,8 @@ def plot_distribution_histogram(X_binned, Y_binned, model, pdf_func):
         Y_output = model(X)
         
         for y_output in Y_output[:200]:
-            arange = np.arange(0, 1000, 1)
-            y_hat = pdf_func(arange / 1000, np.expand_dims(y_output, axis=0))
+            arange = np.arange(0, 700, 1)
+            y_hat = pdf_func(arange / 700, np.expand_dims(y_output, axis=0))
             ax[row][col].fill_between(arange, y_hat, color='blue', alpha=0.01)
         
         ax[row][col].axvline(y, color='red', label='True delta mu', linestyle='dashed')
@@ -329,9 +396,9 @@ def plot_distribution_histogram(X_binned, Y_binned, model, pdf_func):
 def plot_distribution_model_examples(X, Y, model, pdf_func, num_examples=10):
     for sample, dmu in zip(X[:num_examples], Y[:num_examples]):
         output = model(np.expand_dims(sample, axis=0))
-        y_hat_mu = output[0, 0] * 1000
-        x = np.arange(0, 1000, 1)
-        y = pdf_func(x / 1000, output)
+        y_hat_mu = output[0, 0] * 700
+        x = np.arange(0, 700, 1)
+        y = pdf_func(x / 700, output)
 
         plt.tight_layout()
         plt.title(f'Predicted delta mu: {y_hat_mu:.2f}ns, True delta mu: {dmu:.2f}ns')
@@ -346,13 +413,36 @@ def plot_distribution_model_examples(X, Y, model, pdf_func, num_examples=10):
         plt.show()
 
 
+def plot_double_distribution_model_examples(X, Y, model, pdf_func, num_examples=10, split=3):
+    for sample, dmu in zip(X[:num_examples], Y[:num_examples]):
+        output = model(np.expand_dims(sample, axis=0))
+        output1, output2 = output[:, :split], output[:, split:]
+        mu1, mu2 = dmu[0], dmu[1]
+        x = np.arange(-350, 350, 1)
+        y1 = pdf_func(x / 700, output1)
+        y2 = pdf_func(x / 700, output2)
+
+        plt.plot(x, sample / 10, color='grey', alpha=0.5, label='Pulse')
+        plt.tight_layout()
+        plt.axvline(mu1, label=f'True μ: {mu1 : .2f}ns', linestyle='dashed', color='black')
+        plt.axvline(mu2, label=f'True μ: {mu2 : .2f}ns', linestyle='dashed', color='black')
+        plt.fill_between(x, y1, alpha=0.5, label='μ1 predicted distribution')
+        plt.fill_between(x, y2, alpha=0.5, label='μ2 predicted distribution')
+        plt.xlabel('μ [ns]')
+        plt.ylabel('PDF')
+        plt.xlim(-350, 350)
+        plt.ylim(0, 50)
+        plt.legend()
+        plt.show()
+
+
 def plot_prediction_z_distribution_normal(X, Y, model, pdf_func):
     Y_hat = np.zeros((Y.shape[0], model.output_size))
     for i in tqdm(range(0, X.shape[0], 512)):
         Y_hat[i:i+512] = model(X[i:i+512])
     
-    Y_hat_mu = Y_hat[:, 0] * 1000
-    Y_hat_sigma = Y_hat[:, 1] * 1000
+    Y_hat_mu = Y_hat[:, 0] * 700
+    Y_hat_sigma = Y_hat[:, 1] * 700
 
     Y_z = (Y - Y_hat_mu) / Y_hat_sigma
     Y_z = Y_z[np.abs(Y_z) < 5]
@@ -374,11 +464,11 @@ def plot_prediction_percentile_distribution_normal(X, Y, model, pdf_func):
     for i in tqdm(range(0, X.shape[0], 512)):
         Y_hat[i:i+512] = model(X[i:i+512])
     
-    Y_hat_pdfs = np.zeros((Y.shape[0], 1000))
+    Y_hat_pdfs = np.zeros((Y.shape[0], 700))
     for i in tqdm(range(Y.shape[0])):
         Y_hat_pdfs[i] = pdf_func(np.arange(0, 1, 0.001), np.expand_dims(Y_hat[i], axis=0))
     Y_hat_cdfs = np.cumsum(Y_hat_pdfs, axis=1)
-    Y_percentiles = np.array([Y_hat_cdfs[i][int(mu)] for i, mu in enumerate(Y)]) / 1000
+    Y_percentiles = np.array([Y_hat_cdfs[i][int(mu)] for i, mu in enumerate(Y)]) / 700
     
     bins = 100
     plt.figure(figsize=(8, 6))
@@ -400,8 +490,8 @@ def plot_prediction_z_distribution_skewnormal(X, Y, model, pdf_func):
     for i in tqdm(range(0, X.shape[0], 512)):
         Y_hat[i:i+512] = model(X[i:i+512])
     
-    Y_hat_loc = Y_hat[:, 0] * 1000
-    Y_hat_scale = Y_hat[:, 1] * 1000
+    Y_hat_loc = Y_hat[:, 0] * 700
+    Y_hat_scale = Y_hat[:, 1] * 700
     Y_hat_alpha = Y_hat[:, 2]
 
     Y_hat_mu = Y_hat_loc + Y_hat_scale * Y_hat_alpha * np.sqrt(2 / np.pi)
@@ -1448,6 +1538,7 @@ def plot_hit_pattern(hit, filename='hit_pattern'):
 
         image_frame = Image.fromarray(image_array)
         image_frames.append(image_frame)
+        plt.clf()
 
     datetime_tag = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     image_frames[0].save(filename + f'_{datetime_tag}.gif', 
@@ -1727,9 +1818,9 @@ def conv_graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100, dim3
     AT = np.sum(at_channel_hist, axis=(1, 2))
 
     if dim3:
-        graph_model = Conv3DGraphElectronModel(
-            graph_layer_sizes   = [4, 4, 1], 
-            layer_sizes         = [512, 700],
+        graph_model = FastConv3DGraphElectronModel(
+            graph_layer_sizes   = [3, 3, 1], 
+            layer_sizes         = [256, 700],
         )
     else:
         graph_model = ConvGraphElectronModel(
@@ -1747,7 +1838,7 @@ def conv_graph_electron_arrival_prediction(XC, at_channel_hist, epochs=100, dim3
     graph_model.summary()
 
     if epochs > 0:
-        train(graph_model, XC, AT, epochs=epochs, batch_size=128)#, plot_history=True)
+        train(graph_model, XC, AT, epochs=epochs, batch_size=8)#, plot_history=True)
 
     save_model(graph_model, 'conv_graph_model' + ('_3d' if dim3 else ''))
 
@@ -1918,4 +2009,265 @@ def test_graph_network():
         iteration = np.sum(iteration, axis=2)
         iteration = iteration.reshape((16, 16))
         plt.imshow(iteration)
+        plt.show()
+
+
+def generate_N_scatter_events(SS, max_N=4, num_events=int(1e5)):
+    num_samples = SS.shape[0]
+    num_channels = SS.shape[1]
+    center = num_channels / 2
+
+    X = np.zeros((num_events, num_channels))
+    Y = np.zeros((num_events, max_N))
+    
+    dprint('Generating N scatter events')
+    for i in tqdm(range(num_samples)):
+        n = np.random.randint(1, max_N + 1)
+        mu_offsets = np.array(np.random.normal(0, 50, n), dtype=np.int32)
+        mus = center + mu_offsets
+        pulses_idx = np.random.choice(num_samples, n, replace=False)
+        offset_pulses = [np.roll(SS[pulses_idx[j]], mu_offsets[j]) for j in range(n)]
+        X[i] = np.sum(offset_pulses, axis=0)
+        Y[i, :n] = np.sort(mus)
+    
+    return X, Y
+
+def generate_N_channel_scatter_events(X, XC, C, max_N=4, num_events=int(1e5)):
+    num_samples = X.shape[0]
+    num_channels = X.shape[1]
+    center = num_channels / 2
+
+    X_ = np.zeros((num_events, num_channels))
+    XC_ = np.zeros((num_events, XC.shape[1], XC.shape[2], num_channels))
+    Y_ = np.zeros((num_events, max_N))
+    C_ = np.zeros((num_events, max_N, 2))
+
+    dprint('Generating N scatter events')
+    for i in tqdm(range(num_events)):
+        n = np.random.randint(1, max_N + 1)
+        mu_offsets = np.array(np.random.normal(0, 50, n), dtype=np.int32)
+        mus = center + mu_offsets
+        pulses_idx = np.random.choice(num_samples, n, replace=False)
+        offset_pulses = [np.roll(X[pulses_idx[j]], mu_offsets[j]) for j in range(n)]
+        offset_channel_pulses = [np.roll(XC[pulses_idx[j]], mu_offsets[j], axis=2) for j in range(n)]
+        X_[i] = np.sum(offset_pulses, axis=0)
+        XC_[i] = np.sum(offset_channel_pulses, axis=0)
+        Y_[i, :n] = np.sort(mus)
+        C_[i, :n] = np.sort(np.array([C[pulses_idx[j]] for j in range(n)]), axis=0)
+    
+    return X_, XC_, Y_, C_
+
+
+def generate_double_scatter_events(X, XC, C, num_bins=20, max_dmu=1000, num_events=int(1e4)):
+    num_samples = X.shape[0]
+    num_channels = X.shape[1]
+    center = num_channels / 2
+
+    X_ = np.zeros((num_events, num_channels))
+    XC_ = np.zeros((num_events, XC.shape[1], XC.shape[2], num_channels))
+    Y_ = np.zeros((num_events, 4))
+    C_ = np.zeros((num_events, 4, 2))
+    DMU = np.zeros(num_events)
+
+    dprint('Generating double scatter events')
+    for i in tqdm(range(num_events)):
+        n = 2
+        dmu = (i % num_bins) * max_dmu / num_bins
+        mu1 = int(center - dmu // 2)
+        mu2 = int(center + dmu // 2)
+        pulses_idx = np.random.choice(num_samples, 2, replace=False)
+        offset_pulses = [np.roll(X[pulses_idx[j]], mu1) for j in range(2)]
+        offset_channel_pulses = [np.roll(XC[pulses_idx[j]], mu1, axis=2) for j in range(2)]
+        X_[i] = np.sum(offset_pulses, axis=0)
+        XC_[i] = np.sum(offset_channel_pulses, axis=0)
+        Y_[i, :n] = np.sort([mu1, mu2])
+        C_[i, :n] = np.sort(np.array([C[pulses_idx[j]] for j in range(n)]), axis=0)
+        DMU[i] = dmu
+    
+    return X_, XC_, Y_, C_, DMU
+
+
+
+def plot_N_scatter_events(X, Y, num_events=5):
+    for i in range(num_events):
+        plt.plot(X[i], label='Event')
+        scatters = 0
+        for j in range(Y.shape[1]):
+            if Y[i, j] > 0:
+                plt.axvline(Y[i, j], color='red', linestyle='--', label=f'Mu of scatter {j}')
+                scatters += 1
+        plt.legend()
+        plt.ylim(0, 500)
+        plt.title(f'Event {i} with {scatters} scatters')
+        plt.tight_layout()
+        plt.show()
+
+
+def plot_double_distribution_model_examples(X, Y, model, pdf_func, num_examples=10, split=3):
+    for sample, dmu in zip(X[:num_examples], Y[:num_examples]):
+        output = model(np.expand_dims(sample, axis=0))
+        output1, output2 = output[:, :split], output[:, split:]
+        mu1, mu2 = dmu[0], dmu[1]
+        x = np.arange(-350, 350, 1)
+        y1 = pdf_func(x / 700, output1)
+        y2 = pdf_func(x / 700, output2)
+
+        plt.plot(x, sample / 10, color='grey', alpha=0.5, label='Pulse')
+        plt.tight_layout()
+        plt.axvline(mu1, label=f'True μ: {mu1 : .2f}ns', linestyle='dashed', color='black')
+        plt.axvline(mu2, label=f'True μ: {mu2 : .2f}ns', linestyle='dashed', color='black')
+        plt.fill_between(x, y1, alpha=0.5, label='μ1 predicted distribution')
+        plt.fill_between(x, y2, alpha=0.5, label='μ2 predicted distribution')
+        plt.xlabel('μ [ns]')
+        plt.ylabel('PDF')
+        plt.xlim(-350, 350)
+        plt.ylim(0, 50)
+        plt.legend()
+        plt.show()
+
+def plot_n_distribution_model_examples(X, Y, model, pdf_func, num_examples=10, N=4):
+    for sample, mu in zip(X[:num_examples], Y[:num_examples]):
+
+        output = model(np.expand_dims(sample, axis=0))
+        means, stds, masks = output[:, :N * N], output[:, N * N:2 * N * N], output[:, 2 * N * N:]
+        print(means, stds, masks)
+        for i in range(N):
+            plt.tight_layout()
+            x = np.arange(0, 700, 1)
+            plt.plot(x, sample / 10, color='grey', alpha=0.5, label='Pulse')
+            for j in range(i + 1):
+                idx = i * N + j
+                y = pdf_func(x / 700, np.concatenate([means[:, idx:idx+1], stds[:, idx:idx+1]], axis=-1))
+                plt.fill_between(x, y, alpha=0.5, label=f'μ{idx % N + 1} predicted distribution')
+            for j in range(N):
+                if mu[j] != 0:
+                    plt.axvline(mu[j], label=f'True μ: {mu[j] : .2f}', linestyle='dashed', color='black')
+            plt.xlabel('μ [ns]')
+            plt.ylabel('PDF')
+            plt.xlim(0, 700)
+            plt.ylim(0, 50)
+            plt.title(f'mask={masks[0, i] : .2f}')
+            plt.legend()
+            plt.show()
+
+def plot_n_distribution_model_combined_examples(X, Y, model, pdf_func, num_examples=10, N=4):
+    for id, (sample, mu) in enumerate(zip(X[:num_examples], Y[:num_examples])):
+        # set figure size
+        fig, ax = plt.subplots(N, 2, dpi=200, gridspec_kw={'width_ratios': [1, 15]})
+
+        output = model(np.expand_dims(sample, axis=0))
+        means, stds, masks = output[:, :N * N], output[:, N * N:2 * N * N], output[:, 2 * N * N:]
+        for i in range(N):
+            # plot mask
+            ax[i][0].bar(i, masks[0, i], color='blue', alpha=0.5)
+            ax[i][0].set_ylim(0, 1)
+            ax[i][0].grid(False)
+            ax[i][0].set_xticks([])
+            ax[i][0].set_yticks([])
+            # set size of ax plot
+
+            ax[i][0].set_aspect(aspect=10)
+            # reduce width to fit box
+            box = ax[i][0].get_position()
+            ax[i][0].set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+            ax[i][1].grid(False)
+            if i != N - 1:
+                ax[i][1].set_xticks([])
+
+            x = np.arange(0, 700, 1)
+            ax[i][1].plot(x, sample / 10, color='grey', alpha=0.5, label='Pulse', linewidth=0.5)
+            print('means :', means[:, i * N:i * N+i + 1])
+            print('stds  :', stds[:, i * N:i * N+i + 1])
+            print('---')
+            for j in range(i + 1):
+                idx = i * N + j
+                y = pdf_func(x / 700, np.concatenate([means[:, idx:idx+1], stds[:, idx:idx+1]], axis=-1))
+                ax[i][1].fill_between(x, y, alpha=0.5, label=f'μ{idx % N + 1} predicted distribution')
+            for j in range(N):
+                if mu[j] != 0:
+                    ax[i][1].axvline(mu[j], label=f'True μ: {mu[j] : .2f}', linestyle='dashed', color='black', linewidth=0.5)
+            plt.xlabel('μ [ns]')
+            ax[i][1].set_xlim(0, 700)
+            ax[i][1].set_ylim(0, 50)
+            ax[i][1].set_yticks([])
+        ax[0][0].set_title('mask', fontsize=8)
+        ax[0][1].set_title(f'Event {id}')
+
+        # save figure
+        plt.savefig(f'event_{id}_{N}.png')
+
+        plt.show()
+
+def plot_n_distribution_spatial_model_combined_examples(XC, Y, C, model, pdf_func, num_examples=10, N=4):
+    res = 100
+    for id, (sample, z, xy) in enumerate(zip(XC[:num_examples], Y[:num_examples], C[:num_examples])):
+        fig, ax = plt.subplots(N, 3, dpi=200, gridspec_kw={'width_ratios': [1, 5, 2]})
+
+        output = model(np.expand_dims(sample, axis=0))
+        z_means = output[:, :N * N]
+        z_stds  = output[:, N * N:2 * N * N]
+        x_means = output[:, 2 * N * N:3 * N * N]
+        x_stds  = output[:, 3 * N * N:4 * N * N]
+        y_means = output[:, 4 * N * N:5 * N * N]
+        y_stds  = output[:, 5 * N * N:6 * N * N]
+        masks   = output[:, 6 * N * N:6 * N * N + N]
+        for i in range(N):
+            # plot mask
+            ax[i][0].bar(i, masks[0, i], color='blue', alpha=0.5)
+            ax[i][0].set_ylim(0, 1)
+            ax[i][0].grid(False)
+            ax[i][0].set_xticks([])
+            ax[i][0].set_yticks([])
+            # set size of ax plot
+
+            ax[i][0].set_aspect(aspect=10)
+            # reduce width to fit box
+            box = ax[i][0].get_position()
+            ax[i][0].set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+            ax[i][1].grid(False)
+            if i != N - 1:
+                ax[i][1].set_xticks([])
+
+            x = np.arange(0, 700, 1)
+            ax[i][1].plot(x, np.sum(sample, axis=0) / 10, color='grey', alpha=0.5, label='Pulse', linewidth=0.5)
+
+            for j in range(i + 1):
+                idx = i * N + j
+                y = pdf_func(x / 700, np.concatenate([z_means[:, idx:idx+1], z_stds[:, idx:idx+1]], axis=-1))
+                ax[i][1].fill_between(x, y, alpha=0.5, label=f'μ{idx % N + 1} predicted distribution')
+            count = 0
+            for j in range(N):
+                if z[j] != 0:
+                    count += 1
+                    ax[i][1].axvline(z[j], label=f'True μ: {z[j] : .2f}', linestyle='dashed', color='black', linewidth=0.5)
+            ax[i][1].set_xlim(0, 700)
+            ax[i][1].set_ylim(0, 50)
+            ax[i][1].set_yticks([])
+
+            # plot a heatmap of xy positions
+            ax[i][2].imshow(np.zeros((res, res)), cmap='viridis', extent=(0, 1, 0, 1))
+            ax[i][2].scatter(xy[:count, 0], xy[:count, 1], color='red', s=5)
+            ax[i][2].set_xticks([])
+            ax[i][2].set_yticks([])
+            # plot gaussian distribution of xy predicted positions
+            Z_ = np.zeros((res, res))
+            for j in range(i + 1):
+                idx = i * N + j
+                x = np.linspace(0, 1, res)
+                y = np.linspace(0, 1, res)
+                X_, Y_ = np.meshgrid(x, y)
+                print(x_means[0, idx], y_means[0, idx])
+                Z_ += np.exp(-((X_ - x_means[0, idx])**2 + (Y_ - y_means[0, idx])**2) / (2 * x_stds[0, idx]**2))
+            ax[i][2].imshow(Z_, extent=(0, 1, 0, 1), origin='lower', cmap='viridis')
+
+        ax[0][0].set_title('Probability', fontsize=8)
+        ax[0][1].set_title(f'Event {id}')
+        ax[0][2].set_title('Predicted xy')
+        ax[-1][1].set_xlabel('μ [ns]')
+
+        # save figure
+        plt.savefig(f'_event_{id}.png')
+
         plt.show()

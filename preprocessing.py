@@ -371,3 +371,16 @@ def create_sparse_adjacency(adj):
             if adj[i, j]:
                 sparse_adj.append([i, j])
     return np.array(sparse_adj)
+
+
+def get_grid_neighborhood(data, size=3):
+    shape = data.shape
+    print(shape)
+    data = np.pad(data, ((0, 0), (size//2, size//2), (size//2, size//2), (0, 0)), mode='constant')
+    neighborhood_data = np.zeros((shape[0], shape[1], shape[2], size*size, shape[3]))
+    for i in range(shape[1]):
+        for j in range(shape[2]):
+            print(data[i, i:i+size, j:j+size].shape)
+            neighborhood_data[:, i, j] = data[:, i:i+size, j:j+size].reshape(shape[0], -1, shape[3])
+    
+    return neighborhood_data
