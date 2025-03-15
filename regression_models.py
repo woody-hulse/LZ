@@ -1,10 +1,11 @@
 from tensorflow.keras.layers import Input, Dense, ReLU, Convolution2D, Convolution1D, Flatten, Reshape, MaxPooling1D, MaxPooling2D, LSTM, TimeDistributed, Attention, Rescaling
-from tensorflow.keras.layers import Conv1D, Conv2D, Conv3D, GlobalAveragePooling1D, GlobalAveragePooling2D, GlobalAveragePooling3D, Concatenate, Activation, BatchNormalization, Dropout, MaxPool1D
+from tensorflow.keras.layers import Conv1D, Conv2D, Conv3D, GlobalAveragePooling1D, GlobalAveragePooling2D, GlobalAveragePooling3D, Concatenate, Activation, LayerNormalization, BatchNormalization, Dropout, MaxPool1D
 from tensorflow.keras.models import Model, load_model, Sequential
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import BinaryCrossentropy, MeanAbsoluteError, MeanSquaredError, MeanAbsolutePercentageError, CategoricalCrossentropy, Loss, binary_crossentropy
 from tensorflow.keras.initializers import RandomNormal, RandomUniform, HeNormal, HeUniform
 import tensorflow as tf
+from tensorflow_probability import bijectors as tfb
 # tf.keras.mixed_precision.set_global_policy('mixed_float16')
 from tensorflow import math as tfm
 from tensorflow import expand_dims, unstack, stack, concat, gather
@@ -14,6 +15,8 @@ tfd = tfp.distributions
 tfb = tfp.bijectors
 from scipy.sparse import csr_matrix
 import spektral
+from spektral.layers import GATConv
+from functools import partial
 # import keras_tuner
 import numpy as np
 from vgg import *
@@ -41,15 +44,15 @@ def load_model_weights(model, name=None):
     model.load_weights(MODEL_SAVE_PATH + name + '.weights.h5')
     return model
 
-def save_model(model, name=None):
+def save_model(model, name=None, format='keras'):
     if not name: name = model.name
-    debug_print(['saving', name, 'to', MODEL_SAVE_PATH + name + '.keras'])
-    model.save(MODEL_SAVE_PATH + name + '.keras')
+    debug_print(['saving', name, 'to', MODEL_SAVE_PATH + name + f'.{format}'])
+    model.save(MODEL_SAVE_PATH + name + f'.{format}')
 
 
-def load(name):
-    debug_print(['loading', name, 'from', MODEL_SAVE_PATH + name + '.keras'])
-    return load_model(MODEL_SAVE_PATH + name + '.keras')
+def load(name, format='keras'):
+    debug_print(['loading', name, 'from', MODEL_SAVE_PATH + name + f'.{format}'])
+    return load_model(MODEL_SAVE_PATH + name + f'.{format}', compile=True)
 
 
 '''
@@ -1097,8 +1100,7 @@ def skewnormal_pdf_loss_penalty(y_true, output):
 
     return -tf.reduce_mean(log_pdf_skew_normal) + tf.reduce_mean(pdf_skew_normal_0)
 
-def normal_pdf(x, params):
-    mu, sigma = params[:, 0], params[:, 1]
+def normal_pdf(x, mu, sigma):
     normal_dist = tfd.Normal(loc=mu, scale=sigma)
     pdf_normal = normal_dist.prob(x)
 
@@ -1336,35 +1338,872 @@ class MLPDoubleDistributionModel(tf.keras.Model):
 
         dmu_pred = tf.abs(mu1 - mu2)
         return tf.reduce_mean(tf.abs(dmu - dmu_pred * 700))
-    
 
-class MLPNDistributionSpatialModel(tf.keras.Model):
+
+@tf.keras.utils.register_keras_serializable()
+class PartialFunction:
+    def __init__(self, func, **kwargs):
+        self.func = func
+        self.kwargs = kwargs
+
+    def __call__(self, y_true, y_pred):
+        return self.func(y_true, y_pred, **self.kwargs)
+
+    def get_config(self):
+        if hasattr(self.func, "__self__") and self.func.__self__:
+            # It's a bound method; save the class and method name
+            func_class = self.func.__self__.__class__.__name__
+            func_name = self.func.__name__
+            return {"func_type": "method", "class_name": func_class, "method_name": func_name, "kwargs": self.kwargs}
+        elif hasattr(self.func, "__qualname__") and "." in self.func.__qualname__:
+            print("Has qualname", self.func.__name__, ":", self.func.__qualname__)
+            # Static or class function (unbound)
+            func_class = self.func.__qualname__.split(".")[0]
+            func_name = self.func.__name__
+            return {"func_type": "class_function", "class_name": func_class, "method_name": func_name, "kwargs": self.kwargs}
+        else:
+            # It's a standalone function
+            func_name = self.func.__name__
+            return {"func_type": "function", "func_name": func_name, "kwargs": self.kwargs}
+
+    @classmethod
+    def from_config(cls, config):
+        print(f"from_config received config: {config}")
+        if config["func_type"] == "method":
+            class_name = config["class_name"]
+            method_name = config["method_name"]
+            cls_obj = globals().get(class_name)
+            if cls_obj is None:
+                raise ValueError(f"Class {class_name} not found in globals.")
+            func = getattr(cls_obj, method_name)
+        elif config["func_type"] == "class_function":
+            class_name = config["class_name"]
+            method_name = config["method_name"]
+            cls_obj = globals().get(class_name)
+            if cls_obj is None:
+                raise ValueError(f"Class {class_name} not found in globals.")
+            func = getattr(cls_obj, method_name)
+        elif config["func_type"] == "function":
+            # Retrieve the standalone function
+            func_name = config["func_name"]
+            func = globals().get(func_name)
+            if func is None:
+                raise ValueError(f"Function {func_name} not found in globals.")
+        else:
+            raise ValueError(f"Unknown func_type in config: {config['func_type']}")
+
+@tf.keras.utils.register_keras_serializable()
+class GraphMVDModel(tf.keras.Model):
+    cholesky_abs_bound = 50
+    
+    def __init__(self, num_dims, num_dists, adjacency_matrix, cholesky_mask=None, name='graph_mvd_model', **kwargs):
+        super().__init__(name=name + f'_n{num_dims}_d{num_dists}', **kwargs)
+        
+        if isinstance(adjacency_matrix, dict):
+            adjacency_matrix = adjacency_matrix['config']['value']
+        self.adjacency_matrix = adjacency_matrix
+        self.A = spektral.utils.gcn_filter(np.array(adjacency_matrix))
+
+        self.num_dims = num_dims
+        self.num_dists = num_dists
+        
+        if cholesky_mask is None:
+            GraphMVDModel.cholesky_mask = tf.ones((num_dims, num_dims))
+        else:
+            GraphMVDModel.cholesky_mask = cholesky_mask
+            
+        
+        # mask out N\neq M predictions 
+
+        self.dropout_rate = 0.5
+        self.graph_layers = [
+            tf.keras.layers.Dropout(self.dropout_rate),
+            spektral.layers.GCNConv(256, activation='selu', name='graph_0'),
+            tf.keras.layers.Dropout(self.dropout_rate),
+            spektral.layers.GCNConv(128, activation='selu', name='graph_1'),
+            tf.keras.layers.Dropout(self.dropout_rate),
+            spektral.layers.GCNConv(64, activation='selu', name='graph_2')
+        ]
+
+        self.flatten_layer = tf.keras.layers.Flatten()
+
+        self.dense_layers = [
+            tf.keras.layers.Dropout(self.dropout_rate),
+            tf.keras.layers.Dense(128, activation='selu', name='dense_0'),
+            tf.keras.layers.Dropout(self.dropout_rate),
+            tf.keras.layers.Dense(128, activation='selu', name='dense_1'),
+            tf.keras.layers.Dropout(self.dropout_rate),
+            tf.keras.layers.Dense(128, activation='selu', name='dense_2'),
+            tf.keras.layers.Dropout(self.dropout_rate)
+        ]
+
+        self.total_num_dists = num_dists * num_dists  # only use lower triangle
+        self.num_cholesky_params = (num_dims * (num_dims + 1)) // 2
+        self.params_per_dist = num_dims + self.num_cholesky_params
+        self.output_dim = self.num_dists * self.num_dists * self.params_per_dist
+
+        self.output_layers = [
+            [
+                [
+                    tf.keras.layers.Dense(num_dims, activation='sigmoid', name=f'mu_{j}_{i}'),
+                    tf.keras.layers.Dense(self.num_cholesky_params, activation='linear', name=f'cholesky_{j}_{i}')
+                ] for i in range(num_dists)
+            ] for j in range(num_dists)
+        ]
+        self.mask_layer = tf.keras.layers.Dense(num_dists, activation='softmax', name='mask')
+
+    def call(self, x):
+        x = tf.cast(x, dtype=tf.float32)
+        for layer in self.graph_layers:
+            if isinstance(layer, spektral.layers.convolutional.gcn_conv.GCNConv):
+                x = layer([x, self.A])
+            else:
+                x = layer(x)
+
+        x = self.flatten_layer(x)
+
+        for layer in self.dense_layers:
+            x = layer(x)
+
+        dist_params = []
+        for i in range(self.num_dists):
+            for j in range(self.num_dists):
+                mu = self.output_layers[j][i][0](x)
+                cholesky_params = self.output_layers[j][i][1](x)
+                dist_params.append(tf.concat([mu, cholesky_params], axis=-1))
+        dist_params = tf.concat(dist_params, axis=-1)
+
+        mask = self.mask_layer(x)
+
+        return tf.concat([dist_params, mask], axis=-1)
+
+    def get_config(self):
+        config = super(GraphMVDModel, self).get_config()
+        config.update({
+            'num_dims': self.num_dims,
+            'num_dists': self.num_dists,
+            'adjacency_matrix': self.adjacency_matrix.tolist() if isinstance(self.adjacency_matrix, np.ndarray) else self.adjacency_matrix
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+    
+    def decompose_output(self, output):
+        dist_params = output[:, :-self.num_dists]
+        mask = output[:, -self.num_dists:]
+        
+        dist_params = tf.reshape(dist_params, (-1, self.num_dists, self.num_dists, self.params_per_dist))
+        
+        mu_params, cholesky_params = tf.split(dist_params, [self.num_dims, self.num_cholesky_params], axis=-1)
+        
+        return mu_params, cholesky_params, mask
+
+    @tf.keras.utils.register_keras_serializable()
+    def build_cholesky(cholesky_params):
+        L_unpacked = tfb.FillTriangular().forward(cholesky_params)
+        diag_raw = tf.linalg.diag_part(L_unpacked)
+        off_diag = L_unpacked - tf.linalg.diag(diag_raw)
+        diag = tf.math.softplus(diag_raw) + 1e-3
+        L = off_diag + tf.linalg.diag(diag)
+        
+        return L
+
+    @tf.keras.utils.register_keras_serializable()
+    def multivariate_normal_pdf(point, mu, cholesky_params):
+        L = GraphMVDModel.build_cholesky(cholesky_params)
+        delta = point - mu
+        L_expanded = L
+        delta_expanded = tf.expand_dims(delta, -1)
+
+        z = tf.linalg.triangular_solve(L_expanded, delta_expanded, lower=True)
+        z = tf.squeeze(z, axis=-1)
+
+        log_det_term = tf.reduce_sum(tf.math.log(tf.linalg.diag_part(L_expanded)), axis=-1)
+        z_sq_sum = tf.reduce_sum(tf.square(z), axis=-1)
+
+        const_term = 0.5 * tf.cast(mu.shape[1], tf.float32) * tf.math.log(2.0 * np.pi)
+
+        log_pdf = -const_term - log_det_term - 0.5 * z_sq_sum
+        pdf = tf.exp(log_pdf)
+
+        return pdf
+
+    @tf.keras.utils.register_keras_serializable()
+    def pdf_loss(y_true, output, num_dists, num_dims):
+        num_cholesky_params = (num_dims * (num_dims + 1)) // 2
+        params_per_dist = num_dims + num_cholesky_params
+            
+        dist_params = output[:, :-num_dists]
+
+        mask = tf.squeeze(tf.cast(y_true[:, :, 0] != 0, tf.float32))
+
+        sum_log_pdf = 0
+        for k in range(num_dists):
+            params_start, params_end = k * num_dists * params_per_dist, (k + 1) * num_dists * params_per_dist
+            params_k = dist_params[:, params_start:params_end]
+
+            log_pdf = 0
+            for i in range(k + 1):
+                sum_pdf = 0
+                for j in range(k + 1):
+                    params_kj = params_k[:, j * params_per_dist:(j + 1) * params_per_dist]
+                    mu_kj, cholesky_params_kj = params_kj[:, :num_dims], params_kj[:, num_dims:]
+                    pdf = GraphMVDModel.multivariate_normal_pdf(y_true[:, i, :], mu_kj, cholesky_params_kj) * mask[:, i]
+                    sum_pdf += pdf
+                log_pdf += tf.cast(tf.math.log(sum_pdf + 1e-8), tf.float32)
+            sum_log_pdf += log_pdf
+
+        return -tf.reduce_mean(sum_log_pdf)
+    
+    @tf.keras.utils.register_keras_serializable()
+    def mask_loss(y_true, output, num_dists, num_dims):
+        mask = output[:, -num_dists:]
+
+        true_mask = tf.reduce_sum(tf.cast(y_true[:, :, 0] != 0, tf.int32), axis=-1) - 1
+        true_mask_ohe = tf.one_hot(true_mask, num_dists)
+        N_loss = tf.keras.losses.CategoricalCrossentropy()(true_mask_ohe, mask)
+        return N_loss
+    
+    @tf.keras.utils.register_keras_serializable()
+    def combined_loss(y_true, output, num_dists, num_dims):
+        return GraphMVDModel.pdf_loss(y_true, output, num_dists, num_dims) + GraphMVDModel.mask_loss(y_true, output, num_dists, num_dims)
+    
+    @tf.keras.utils.register_keras_serializable()
+    def get_partial_func(func, num_dists, num_dims):
+        return PartialFunction(func, num_dists=num_dists, num_dims=num_dims)
+    
+    def build(self, input_shape):
+        super().build(input_shape)
+        
+    def make_cholesky_mask(num_dims, correlated_dims, all=False):
+        if all:
+            return tf.ones((num_dims, num_dims))
+        
+        mask = np.zeros((num_dims, num_dims))
+        mask[np.diag_indices(num_dims)] = 1
+        for i, j in correlated_dims:
+            mask[i, j] = 1
+            mask[j, i] = 1
+        return tf.convert_to_tensor(mask, dtype=tf.float32)
+
+
+@tf.keras.utils.register_keras_serializable()    
+class GraphMultivariateNormalModel(tf.keras.Model):
+    N = 4
+    time_range=1
+    space_range=1
+    corr_range=0.98
+
+    def __init__(self, adjacency_matrix, name='graph_multivariate_normal_model', **kwargs):
+        super().__init__(name=name, **kwargs)
+        initializer = RandomNormal()
+        small_initializer = RandomNormal(stddev=0.01)
+        self.output_size = GraphMultivariateNormalModel.N
+
+        if type(adjacency_matrix) == dict:
+            adjacency_matrix = np.array(adjacency_matrix['config']['value'])
+        self.adjacency_matrix = adjacency_matrix
+        self.A = spektral.utils.gcn_filter(adjacency_matrix)
+
+        self.dropout_rate = 0.5
+        self.graph_layers = [
+            Dropout(self.dropout_rate),
+            spektral.layers.GCNConv(512, activation='selu', name='graph1'),
+            Dropout(self.dropout_rate),
+            spektral.layers.GCNConv(256, activation='selu', name='graph2'),
+            Dropout(self.dropout_rate),
+            spektral.layers.GCNConv(128, activation='selu', name='graph3')
+        ]
+
+        self.flatten_layer = Flatten()
+
+        self.dense_layers = [
+            Dropout(self.dropout_rate),
+            Dense(64, kernel_initializer=initializer, activation='selu', name='dense1'),
+            Dropout(self.dropout_rate),
+            Dense(64, kernel_initializer=initializer, activation='selu', name='dense2'),
+            Dropout(self.dropout_rate),
+            Dense(64, kernel_initializer=initializer, activation='selu', name='dense3'),
+            Dropout(self.dropout_rate)
+        ]
+
+        self.mux = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid', name='mux')
+        self.muy = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid', name='muy')
+        self.muz = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid', name='muz')
+
+        self.sigx = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid', name='sigx')
+        self.sigy = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid', name='sigy')
+        self.sigz = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid', name='sigz')
+
+        self.rhoxy = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='tanh', name='rhoxy')
+        self.rhoxz = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='tanh', name='rhoxz')
+        self.cyz = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='tanh', name='cyz')
+
+        self.count = Dense(self.output_size * self.output_size, activation='linear', name='count')
+
+        self.mask = Dense(self.output_size, kernel_initializer=initializer, activation='softmax', name='mask')
+    
+    def call(self, x):
+        def constrain_mu(mu, range):
+            return mu * range + (1 - range) / 2
+        def constrain_sig(sig, range):
+            return sig * range + 1e-5
+        def constrain_corr(corr, range):
+            return corr * range
+
+        for layer in self.graph_layers:
+            if type(layer) == spektral.layers.convolutional.gcn_conv.GCNConv:
+                x = layer([x, self.A])
+            else:
+                x = layer(x)
+        
+        x = self.flatten_layer(x)
+
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        mux = constrain_mu(self.mux(x), GraphMultivariateNormalModel.time_range)
+        muy = constrain_mu(self.muy(x), GraphMultivariateNormalModel.space_range)
+        muz = constrain_mu(self.muz(x), GraphMultivariateNormalModel.space_range)
+
+        sigx = constrain_sig(self.sigx(x), GraphMultivariateNormalModel.time_range)
+        sigy = constrain_sig(self.sigy(x), GraphMultivariateNormalModel.space_range)
+        sigz = constrain_sig(self.sigz(x), GraphMultivariateNormalModel.space_range)
+
+        rhoxy = constrain_corr(self.rhoxy(x), GraphMultivariateNormalModel.corr_range)
+        rhoxz = constrain_corr(self.rhoxz(x), GraphMultivariateNormalModel.corr_range)
+        cyz = constrain_corr(self.cyz(x), GraphMultivariateNormalModel.corr_range)
+
+        count = self.count(x)
+
+        mask = self.mask(x)
+
+        return tf.concat([
+            mux,    #          0 : N * N
+            muy,    #      N * N : 2 * N * N
+            muz,    #  2 * N * N : 3 * N * N
+            sigx,   #  3 * N * N : 4 * N * N
+            sigy,   #  4 * N * N : 5 * N * N
+            sigz,   #  5 * N * N : 6 * N * N
+            rhoxy,  #  6 * N * N : 7 * N * N
+            rhoxz,  #  7 * N * N : 8 * N * N
+            cyz,    #  8 * N * N : 9 * N * N
+            count,  #  9 * N * N : 10 * N * N
+            mask    # 10 * N * N : 10 * N * N + N
+        ], axis=-1)
+    
+    def get_config(self):
+        config = super(GraphMultivariateNormalModel, self).get_config()
+        config.update({
+            'adjacency_matrix': self.adjacency_matrix,
+        })
+        return config
+    
+    def decompose_output(output, show=False):
+        N = GraphMultivariateNormalModel.N
+        mux = output[:, 0:N * N]
+        muy = output[:, N * N:2 * N * N]
+        muz = output[:, 2 * N * N:3 * N * N]
+        sigx = output[:, 3 * N * N:4 * N * N]
+        sigy = output[:, 4 * N * N:5 * N * N]
+        sigz = output[:, 5 * N * N:6 * N * N]
+        rhoxy = output[:, 6 * N * N:7 * N * N]
+        rhoxz = output[:, 7 * N * N:8 * N * N]
+        cyz = output[:, 8 * N * N:9 * N * N]
+        count = output[:, 9 * N * N:10 * N * N]
+        mask = output[:, 10 * N * N:10 * N * N + N]
+
+        if show:
+            print("mux   :", np.array(mux))
+            print("muy   :", np.array(muy))
+            print("muz   :", np.array(muz))
+            print("sigx  :", np.array(sigx))
+            print("sigy  :", np.array(sigy))
+            print("sigz  :", np.array(sigz))
+            print("rhoxy :", np.array(rhoxy))
+            print("rhoxz :", np.array(rhoxz))
+            print("cyz   :", np.array(cyz))
+            print("count :", np.array(count))
+            print("mask  :", np.array(mask))
+        
+        return mux, muy, muz, sigx, sigy, sigz, rhoxy, rhoxz, cyz, count, mask
+    """
+    @tf.keras.utils.register_keras_serializable()
+    def multivariate_norm_pdf(x, y, z, mux, muy, muz, sigx, sigy, sigz, rhoxy, rhoxz, cyz):
+        x = (x - mux) / sigx
+        y = (y - muy) / sigy
+        z = (z - muz) / sigz
+
+        rhoxy, rhoxz, rhoyz = tf.zeros_like(rhoxy), tf.zeros_like(rhoxz), tf.zeros_like(cyz)
+        z = muz
+
+        # Cholesky decomposition of the correlation matrix
+        # rhoyz = cyz * tf.sqrt(1 - rhoxy ** 2) * tf.sqrt(1 - rhoxz ** 2) + rhoxy * rhoxz
+
+        # Build the covariance matrix
+        cov_matrix = tf.stack([
+            tf.stack([sigx**2, rhoxy * sigx * sigy, rhoxz * sigx * sigz], axis=-1),
+            tf.stack([rhoxy * sigx * sigy, sigy**2, rhoyz * sigy * sigz], axis=-1),
+            tf.stack([rhoxz * sigx * sigz, rhoyz * sigy * sigz, sigz**2], axis=-1)
+        ], axis=-2)
+
+        # Compute the determinant and inverse of the covariance matrix
+        det_cov = tf.linalg.det(cov_matrix)
+        inv_cov = tf.linalg.inv(cov_matrix)
+
+        # Normalize the determinant
+        norm_factor = 1 / ((2 * np.pi) ** 1.5 * tf.sqrt(det_cov))
+
+        # Build the deviation vector
+        dev = tf.stack([x - mux, y - muy, z - muz], axis=-1)
+
+        # Compute the exponent
+        exponent = -0.5 * tf.reduce_sum(dev * tf.matmul(dev[:, tf.newaxis, :], inv_cov)[:, 0, :], axis=-1)
+
+        # Return the PDF
+        return norm_factor * tf.exp(exponent)
+
+    """
+    @tf.keras.utils.register_keras_serializable()
+    def multivariate_norm_pdf(x, y, z, mux, muy, muz, sigx, sigy, sigz, rhoxy, rhoxz, cyz):
+        x = (x - mux) / sigx
+        y = (y - muy) / sigy
+        z = (z - muz) / sigz
+
+        # Cholesky decomposition of the correlation matrix
+        rhoyz = cyz * tf.sqrt(1 - rhoxy ** 2) * tf.sqrt(1 - rhoxz ** 2) + rhoxy * rhoxz
+
+        det_rho = 1 - (rhoxy**2 + rhoxz**2 + rhoyz**2) + 2 * rhoxy * rhoxz * rhoyz
+        w = (
+            x**2 * (rhoyz**2 - 1)
+            + y**2 * (rhoxz**2 - 1)
+            + z**2 * (rhoxy**2 - 1)
+            + 2 * (
+                x * y * (rhoxy - rhoxz * rhoyz)
+                + x * z * (rhoxz - rhoxy * rhoyz)
+                + y * z * (rhoyz - rhoxy * rhoxz)
+            )
+        )
+
+        prefactor = 1 / (2 * tf.sqrt(2.0) * np.pi**(3/2) * tf.sqrt(det_rho))
+        exponent = tf.exp(w / (2 * det_rho))
+        
+        return prefactor * exponent
+    
+    @tf.keras.utils.register_keras_serializable()
+    def multivariate_norm_xycorr_pdf(x, y, z, mux, muy, muz, sigx, sigy, sigz, rhoxy, rhoxz, cyz):
+        # bivariate_pdf = GraphDistributionModel.bivariate_normal_pdf(x, y, mux, muy, sigx, sigy, rhoxy)
+        independent_pdf = normal_pdf(x, mux, sigx) * normal_pdf(y, muy, sigy) * normal_pdf(z, muz, sigz)
+        return independent_pdf
+    
+    @tf.keras.utils.register_keras_serializable()
+    def pdf_loss(y_true, output):
+        N = GraphMultivariateNormalModel.N
+        mux = output[:, 0:N * N]
+        muy = output[:, N * N:2 * N * N]
+        muz = output[:, 2 * N * N:3 * N * N]
+
+        sigx = output[:, 3 * N * N:4 * N * N]
+        sigy = output[:, 4 * N * N:5 * N * N]
+        sigz = output[:, 5 * N * N:6 * N * N]
+
+        rhoxy = output[:, 6 * N * N:7 * N * N]
+        rhoxz = output[:, 7 * N * N:8 * N * N]
+        cyz = output[:, 8 * N * N:9 * N * N]
+
+        count = output[:, 9 * N * N:10 * N * N]
+
+        x, y, z = y_true[:, :, 0], y_true[:, :, 1], y_true[:, :, 2]
+
+        mask = tf.squeeze(tf.cast(z != 0, tf.float32))
+
+        sum_log_pdf = 0
+        for n in range(N):
+            mux_n = mux[:, n*N:(n+1)*N]
+            muy_n = muy[:, n*N:(n+1)*N]
+            muz_n = muz[:, n*N:(n+1)*N]
+
+            sigx_n = sigx[:, n*N:(n+1)*N]
+            sigy_n = sigy[:, n*N:(n+1)*N]
+            sigz_n = sigz[:, n*N:(n+1)*N]
+
+            rhoxy_n = rhoxy[:, n*N:(n+1)*N]
+            rhoxz_n = rhoxz[:, n*N:(n+1)*N]
+            cyz_n = cyz[:, n*N:(n+1)*N]
+
+            count_n = count[:, n*N:(n+1)*N]
+
+            log_pdf = 0
+            for i in range(n + 1):
+                sum_pdf = 0
+                for j in range(n + 1):
+                    pdf = GraphMultivariateNormalModel.multivariate_norm_xycorr_pdf(
+                        x[:, i], y[:, i], z[:, i], 
+                        mux_n[:, j], muy_n[:, j], muz_n[:, j], 
+                        sigx_n[:, j], sigy_n[:, j], sigz_n[:, j], 
+                        rhoxy_n[:, j], rhoxz_n[:, j], cyz_n[:, j]
+                    ) * mask[:, i]
+
+                    sum_pdf += pdf
+                
+                log_pdf += tf.cast(tf.math.log(sum_pdf + 1e-8), tf.float32)
+            sum_log_pdf += tf.reduce_mean(log_pdf)
+
+        return -sum_log_pdf
+    
+    @tf.keras.utils.register_keras_serializable()
+    def step(self, x, y, training=True):
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=training)
+            loss_value = self.compute_loss(x, y, y_pred, sample_weight=None, training=training)
+        gradients = tape.gradient(loss_value, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        return loss_value
+
+    @tf.keras.utils.register_keras_serializable()
+    def mask_loss(y_true, output):
+        N = GraphMultivariateNormalModel.N
+        mask = output[:, 10 * N * N:10 * N * N + N]
+        x, y, z = y_true[:, :, 0], y_true[:, :, 1], y_true[:, :, 2]
+
+        true_mask = tf.reduce_sum(tf.cast(z != 0, tf.int32), axis=-1) - 1
+        true_mask_ohe = tf.one_hot(true_mask, N)
+        N_loss = tf.keras.losses.CategoricalCrossentropy()(true_mask_ohe, mask)
+        return N_loss
+    
+    @tf.keras.utils.register_keras_serializable()
+    def combined_loss(y_true, output):
+        a1 = 1
+
+        pdf_loss = GraphMultivariateNormalModel.pdf_loss(y_true, output) 
+        mask_loss = GraphMultivariateNormalModel.mask_loss(y_true, output)
+
+        return pdf_loss + a1 * mask_loss
+    
+    def build(self, input_shape):
+        super().build(input_shape)
+
+
+class DenseMultivariateNormalModel(GraphMultivariateNormalModel):
+    def __init__(self, name='dense_multivariate_normal_model'):
+        super().__init__(np.zeros((24, 24)), name=name)
+        initializer = RandomNormal()
+        
+        self.graph_layers = []
+        self.dense_layers = [
+            Dense(256, kernel_initializer=initializer, activation='selu', name='dense1'),
+            Dense(256, kernel_initializer=initializer, activation='selu', name='dense2'),
+            Dense(256, kernel_initializer=initializer, activation='selu', name='dense3'),
+        ]
+    
+    def call(self, x):
+        def constrain_mu(mu, range):
+            return mu * range + (1 - range) / 2
+        def constrain_sig(sig, range):
+            return sig * range + 1e-5
+        def constrain_corr(corr, range):
+            return corr * range
+
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        mux = constrain_mu(self.mux(x), GraphMultivariateNormalModel.time_range)
+        muy = constrain_mu(self.muy(x), GraphMultivariateNormalModel.space_range)
+        muz = constrain_mu(self.muz(x), GraphMultivariateNormalModel.space_range)
+
+        sigx = constrain_sig(self.sigx(x), GraphMultivariateNormalModel.time_range)
+        sigy = constrain_sig(self.sigy(x), GraphMultivariateNormalModel.space_range)
+        sigz = constrain_sig(self.sigz(x), GraphMultivariateNormalModel.space_range)
+
+        rhoxy = constrain_corr(self.rhoxy(x), GraphMultivariateNormalModel.corr_range)
+        rhoxz = constrain_corr(self.rhoxz(x), GraphMultivariateNormalModel.corr_range)
+        cyz = constrain_corr(self.cyz(x), GraphMultivariateNormalModel.corr_range)
+
+        count = self.count(x)
+
+        mask = self.mask(x)
+
+        return tf.concat([
+            mux,    #          0 : N * N
+            muy,    #      N * N : 2 * N * N
+            muz,    #  2 * N * N : 3 * N * N
+            sigx,   #  3 * N * N : 4 * N * N
+            sigy,   #  4 * N * N : 5 * N * N
+            sigz,   #  5 * N * N : 6 * N * N
+            rhoxy,  #  6 * N * N : 7 * N * N
+            rhoxz,  #  7 * N * N : 8 * N * N
+            cyz,    #  8 * N * N : 9 * N * N
+            count,  #  9 * N * N : 10 * N * N
+            mask    # 10 * N * N : 10 * N * N + N
+        ], axis=-1)
+    
+    @tf.keras.utils.register_keras_serializable()
+    def step(self, x, y, training=True):
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=training)
+            loss_value = self.compute_loss(x, y, y_pred, sample_weight=None, training=training)
+        gradients = tape.gradient(loss_value, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        return loss_value
+
+
+class GATNumScattersModel(tf.keras.Model):
+    def __init__(self, adjacency_matrix, name='gat_num_scatters_model', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.adjacency_matrix = adjacency_matrix
+        self.A = spektral.utils.gcn_filter(adjacency_matrix)
+        
+        self.dropout_rate = 0.5
+        self.graph_layers = [
+            Dropout(self.dropout_rate),
+            spektral.layers.GATConv(512, activation='selu', name='graph1'),
+            Dropout(self.dropout_rate),
+            spektral.layers.GATConv(256, activation='selu', name='graph2'),
+            Dropout(self.dropout_rate),
+            spektral.layers.GATConv(128, activation='selu', name='graph3')
+        ]
+
+        self.flatten_layer = Flatten()
+
+        self.dense_layers = [
+            Dropout(self.dropout_rate),
+            Dense(64, activation='selu', name='dense1'),
+            Dropout(self.dropout_rate),
+            Dense(64, activation='selu', name='dense2'),
+            Dropout(self.dropout_rate),
+            Dense(64, activation='selu', name='dense3'),
+            Dropout(self.dropout_rate)
+        ]
+
+        self.num_scatters = Dense(1, activation='linear', name='num_scatters')
+    
+    def call(self, x):
+        for layer in self.graph_layers:
+            if type(layer) == spektral.layers.convolutional.gat_conv.GATConv:
+                x = layer([x, self.A])
+            else:
+                x = layer(x)
+        
+        x = self.flatten_layer(x)
+
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        num_scatters = self.num_scatters(x)
+        
+        return num_scatters
+    
+    def get_config(self):
+        config = super(GATNumScattersModel, self).get_config()
+        config.update({
+            'adjacency_matrix': self.adjacency_matrix,
+        })
+        return config
+    
+    @tf.keras.utils.register_keras_serializable()
+    def step(self, x, y, training=True):
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=training)
+            loss_value = self.compute_loss(x, y, y_pred, sample_weight=None, training=training)
+        gradients = tape.gradient(loss_value, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        return loss_value
+
+    def build(self, input_shape):
+        super().build(input_shape)
+
+
+class DenseNumScattersModel(GATNumScattersModel):
+    def __init__(self, name='dense_num_scatters_model'):
+        super().__init__(np.zeros((24, 24)), name=name)
+        initializer = RandomNormal()
+        
+        self.graph_layers = []
+        self.dense_layers = [
+            Dense(256, kernel_initializer=initializer, activation='selu', name='dense1'),
+            Dense(256, kernel_initializer=initializer, activation='selu', name='dense2'),
+            Dense(256, kernel_initializer=initializer, activation='selu', name='dense3'),
+        ]
+    
+    def call(self, x):
+        for layer in self.dense_layers:
+            x = layer(x)
+        
+        num_scatters = self.num_scatters(x)
+        
+        return num_scatters
+    
+    @tf.keras.utils.register_keras_serializable()
+    def step(self, x, y, training=True):
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=training)
+            loss_value = self.compute_loss(x, y, y_pred, sample_weight=None, training=training)
+        gradients = tape.gradient(loss_value, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        return loss_value
+
+
+class GATMultivariateNormalModel(GraphMultivariateNormalModel):
+    N = 4
+    time_range = 1
+    space_range = 1
+    corr_range = 0.98
+
+    def __init__(self, adjacency_matrix, name='gat_multivariate_normal_model', **kwargs):
+        super().__init__(adjacency_matrix=adjacency_matrix, name=name, **kwargs)
+        self.output_size = self.N
+
+        if isinstance(adjacency_matrix, dict):
+            adjacency_matrix = np.array(adjacency_matrix['config']['value'])
+        self.adjacency_matrix = adjacency_matrix
+        
+        self.A = spektral.utils.gcn_filter(adjacency_matrix)
+        
+        self.dropout_rate = 0.3
+        hidden_channels = 128
+        heads = 4  # multi-head attention
+
+        # Initializers
+        initializer = HeNormal()
+        small_initializer = RandomNormal(stddev=0.01)
+
+        self.gat1 = GATConv(hidden_channels, heads=heads, activation='elu', kernel_initializer=initializer)
+        self.norm1 = LayerNormalization()
+
+        self.gat2 = GATConv(hidden_channels, heads=heads, activation='elu', kernel_initializer=initializer)
+        self.norm2 = LayerNormalization()
+        
+        self.gat3 = GATConv(hidden_channels, heads=heads, activation='elu', kernel_initializer=initializer)
+        self.norm3 = LayerNormalization()
+        
+        self.flatten_layer = Flatten()
+        
+        self.dense_layers = [
+            Dense(128, kernel_initializer=initializer, activation='gelu'),
+            BatchNormalization(),
+            Dropout(self.dropout_rate),
+            Dense(128, kernel_initializer=initializer, activation='gelu'),
+            BatchNormalization(),
+            Dropout(self.dropout_rate),
+            Dense(128, kernel_initializer=initializer, activation='gelu'),
+            BatchNormalization(),
+            Dropout(self.dropout_rate)
+        ]
+
+        # Parameter output layers
+        # Output is 4x4 parameters for each of: mux, muy, muz, sigx, sigy, sigz, rhoxy, rhoxz, cyz, count
+        param_size = self.output_size * self.output_size
+
+        self.mux = Dense(param_size, kernel_initializer=small_initializer, activation='sigmoid', name='mux')
+        self.muy = Dense(param_size, kernel_initializer=small_initializer, activation='sigmoid', name='muy')
+        self.muz = Dense(param_size, kernel_initializer=small_initializer, activation='sigmoid', name='muz')
+
+        self.sigx = Dense(param_size, kernel_initializer=small_initializer, activation='sigmoid', name='sigx')
+        self.sigy = Dense(param_size, kernel_initializer=small_initializer, activation='sigmoid', name='sigy')
+        self.sigz = Dense(param_size, kernel_initializer=small_initializer, activation='sigmoid', name='sigz')
+
+        self.rhoxy = Dense(param_size, kernel_initializer=small_initializer, activation='tanh', name='rhoxy')
+        self.rhoxz = Dense(param_size, kernel_initializer=small_initializer, activation='tanh', name='rhoxz')
+        self.cyz = Dense(param_size, kernel_initializer=small_initializer, activation='tanh', name='cyz')
+
+        self.count = Dense(param_size, activation='linear', name='count')
+        
+        self.mask = Dense(self.output_size, kernel_initializer=initializer, activation='softmax', name='mask')
+    
+    def call(self, x):
+        def constrain_mu(mu, range):
+            return mu * range + (1 - range) / 2
+
+        def constrain_sig(sig, range):
+            return sig * range + 1e-5
+
+        def constrain_corr(corr, range):
+            return corr * range
+
+        # GAT Layer 1
+        h = self.gat1([x, self.A])
+        h = self.norm1(h)
+        h = tf.nn.dropout(h, rate=self.dropout_rate)
+
+        # GAT Layer 2 + residual
+        h2 = self.gat2([h, self.A])
+        h2 = self.norm2(h2)
+        h2 = tf.nn.dropout(h2, rate=self.dropout_rate)
+        h = h + h2  # Residual connection
+
+        # GAT Layer 3 + residual
+        h3 = self.gat3([h, self.A])
+        h3 = self.norm3(h3)
+        h3 = tf.nn.dropout(h3, rate=self.dropout_rate)
+        h = h + h3  # Residual connection
+        
+        h = self.flatten_layer(h)
+        
+        for layer in self.dense_layers:
+            h = layer(h)
+            
+        mux = constrain_mu(self.mux(h), GraphMultivariateNormalModel.time_range)
+        muy = constrain_mu(self.muy(h), GraphMultivariateNormalModel.space_range)
+        muz = constrain_mu(self.muz(h), GraphMultivariateNormalModel.space_range)
+
+        sigx = constrain_sig(self.sigx(h), GraphMultivariateNormalModel.time_range)
+        sigy = constrain_sig(self.sigy(h), GraphMultivariateNormalModel.space_range)
+        sigz = constrain_sig(self.sigz(h), GraphMultivariateNormalModel.space_range)
+
+        rhoxy = constrain_corr(self.rhoxy(h), GraphMultivariateNormalModel.corr_range)
+        rhoxz = constrain_corr(self.rhoxz(h), GraphMultivariateNormalModel.corr_range)
+        cyz = constrain_corr(self.cyz(h), GraphMultivariateNormalModel.corr_range)
+
+        count = self.count(h)
+
+        mask = self.mask(h)
+        
+        return tf.concat([
+            mux,    #          0 : N * N
+            muy,    #      N * N : 2 * N * N
+            muz,    #  2 * N * N : 3 * N * N
+            sigx,   #  3 * N * N : 4 * N * N
+            sigy,   #  4 * N * N : 5 * N * N
+            sigz,   #  5 * N * N : 6 * N * N
+            rhoxy,  #  6 * N * N : 7 * N * N
+            rhoxz,  #  7 * N * N : 8 * N * N
+            cyz,    #  8 * N * N : 9 * N * N
+            count,  #  9 * N * N : 10 * N * N
+            mask    # 10 * N * N : 10 * N * N + N
+        ], axis=-1)
+
+
+
+class GraphDistributionModel(tf.keras.Model):
     N = 4
     time_range=0.8
-    space_range=0.8
+    space_range=1
     def __init__(self, adjacency_matrix, name='mlp_n_distribution_spatial_model', **kwargs):
         super().__init__(name=name, **kwargs)
         initializer = RandomNormal()
         small_initializer = RandomNormal(stddev=0.01)
-        self.output_size = MLPNDistributionSpatialModel.N
+        self.output_size = GraphDistributionModel.N
 
         if type(adjacency_matrix) == dict: # for deserialization
             adjacency_matrix = np.array(adjacency_matrix['config']['value'])
         self.adjacency_matrix = adjacency_matrix
         self.A = spektral.utils.gcn_filter(adjacency_matrix)
 
-        graph1 = spektral.layers.GCNConv(512, activation='selu')
+        graph1 = spektral.layers.GCNConv(256, activation='selu')
         graph2 = spektral.layers.GCNConv(128, activation='selu')
-        graph3 = spektral.layers.GCNConv(128, activation='selu')
+        graph3 = spektral.layers.GCNConv(64, activation='selu')
 
         self.graph_layers = [graph1, graph2, graph3]
-
+        # self.graph_layers = []
         self.flatten_layer = Flatten()
 
         dense1 = Dense(64, kernel_initializer=initializer, activation='selu')
         dense2 = Dense(64, kernel_initializer=initializer, activation='selu')
+        dense3 = Dense(64, kernel_initializer=initializer, activation='selu')
 
-        self.dense_layers = [dense1, dense2]
+        self.dense_layers = [dense1, dense2, dense3]
 
         self.z_mean_output = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid')
         self.z_std_output = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid')
@@ -1375,6 +2214,10 @@ class MLPNDistributionSpatialModel(tf.keras.Model):
         self.y_mean_output = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid')
         self.y_std_output = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='sigmoid')
 
+        self.rho_output = Dense(self.output_size * self.output_size, kernel_initializer=small_initializer, activation='tanh')
+
+        self.count_output = Dense(self.output_size * self.output_size, activation='linear')
+
         self.mask_output = Dense(self.output_size, kernel_initializer=initializer, activation='softmax')
     
     def call(self, x):
@@ -1382,7 +2225,7 @@ class MLPNDistributionSpatialModel(tf.keras.Model):
             return mu * range + (1 - range) / 2
         def constrain_std(std, range):
             return std * range + 1e-5
-
+        
         for layer in self.graph_layers:
             x = layer([x, self.A])
         
@@ -1391,28 +2234,70 @@ class MLPNDistributionSpatialModel(tf.keras.Model):
         for layer in self.dense_layers:
             x = layer(x)
 
-        z_mean_output = constrain_mean(self.z_mean_output(x), MLPNDistributionSpatialModel.time_range)
-        x_mean_output = constrain_mean(self.x_mean_output(x), MLPNDistributionSpatialModel.space_range)
-        y_mean_output = constrain_mean(self.y_mean_output(x), MLPNDistributionSpatialModel.space_range)
+        z_mean_output = constrain_mean(self.z_mean_output(x), GraphDistributionModel.time_range)
+        x_mean_output = constrain_mean(self.x_mean_output(x), GraphDistributionModel.space_range)
+        y_mean_output = constrain_mean(self.y_mean_output(x), GraphDistributionModel.space_range)
 
-        z_std_output = constrain_std(self.z_std_output(x), MLPNDistributionSpatialModel.time_range)
-        x_std_output = constrain_std(self.x_std_output(x), MLPNDistributionSpatialModel.space_range)
-        y_std_output = constrain_std(self.y_std_output(x), MLPNDistributionSpatialModel.space_range)
+        z_std_output = constrain_std(self.z_std_output(x), GraphDistributionModel.time_range)
+        x_std_output = constrain_std(self.x_std_output(x), GraphDistributionModel.space_range)
+        y_std_output = constrain_std(self.y_std_output(x), GraphDistributionModel.space_range)
+
+        rho_output = self.rho_output(x)
+
+        count_output = self.count_output(x)
 
         mask_output = self.mask_output(x)
 
-        return tf.concat([z_mean_output, z_std_output, x_mean_output, x_std_output, y_mean_output, y_std_output, mask_output], axis=-1)
+        return tf.concat([
+            z_mean_output, # 0 : N * N
+            z_std_output,  # N * N : 2 * N * N
+            x_mean_output, # 2 * N * N : 3 * N * N
+            x_std_output,  # 3 * N * N : 4 * N * N
+            y_mean_output, # 4 * N * N : 5 * N * N
+            y_std_output,  # 5 * N * N : 6 * N * N
+            rho_output,    # 6 * N * N : 7 * N * N
+            count_output,  # 7 * N * N : 8 * N * N
+            mask_output    # 8 * N * N : 8 * N * N + N
+        ], axis=-1)
+
+    def get_config(self):
+        config = super(GraphDistributionModel, self).get_config()
+        config.update({
+            'adjacency_matrix': self.adjacency_matrix,
+        })
+        return config
     
+
     @tf.keras.utils.register_keras_serializable()
-    def loss(y_true, output):
-        N = MLPNDistributionSpatialModel.N
-        z_mean_output   = output[:,          :N * N]
-        z_std_output    = output[:,     N * N:2 * N * N]
+    def z_loss(y_true, output):
+        N = GraphDistributionModel.N
+        z_mean_output = output[:, 0:N * N]
+        z_std_output = output[:, N * N:2 * N * N]
+
+        z = y_true[:, :, 0]
+        mask = tf.squeeze(tf.cast(z != 0, tf.float32))
+
+        sum_log_pdf_normal = 0
+        for n in range(N):
+            n_z_mean_output = z_mean_output[:, n * N:n * N + N] * mask
+            n_z_std_output = z_std_output[:, n * N:n * N + N] * mask + (1 - mask)
+            
+            sum_pdf_normal = 0
+            for i in range(n + 1):
+                z_pdf_normal = normal_pdf(z[:, i] / 700, n_z_mean_output[:, i], n_z_std_output[:, i])
+                sum_pdf_normal += z_pdf_normal
+            log_pdf_normal = tf.cast(tf.math.log(sum_pdf_normal + 1e-12), tf.float32)
+            sum_log_pdf_normal += tf.reduce_mean(log_pdf_normal)
+        
+        return -sum_log_pdf_normal
+
+    @tf.keras.utils.register_keras_serializable()
+    def xy_loss(y_true, output):
+        N = GraphDistributionModel.N
         x_mean_output   = output[:, 2 * N * N:3 * N * N]
         x_std_output    = output[:, 3 * N * N:4 * N * N]
         y_mean_output   = output[:, 4 * N * N:5 * N * N]
         y_std_output    = output[:, 5 * N * N:6 * N * N]
-        mask_output     = output[:, 6 * N * N:6 * N * N + N]
 
         z, x, y = y_true[:, :, 0], y_true[:, :, 1], y_true[:, :, 2]
 
@@ -1420,115 +2305,147 @@ class MLPNDistributionSpatialModel(tf.keras.Model):
 
         sum_log_pdf_normal = 0
         for n in range(N):
-            n_z_mean_output = z_mean_output[:, n * N:(n + 1) * N] * mask
-            n_z_std_output  = z_std_output[:, n * N:(n + 1) * N] * mask + (1 - mask)
-
             n_x_mean_output = x_mean_output[:, n * N:(n + 1) * N] * mask
             n_x_std_output  = x_std_output[:, n * N:(n + 1) * N] * mask + (1 - mask)
 
             n_y_mean_output = y_mean_output[:, n * N:(n + 1) * N] * mask
             n_y_std_output  = y_std_output[:, n * N:(n + 1) * N] * mask + (1 - mask)
 
-            sum_z_pdf_normal = 0
             sum_x_pdf_normal = 0
             sum_y_pdf_normal = 0
             for i in range(n + 1):
-                z_pdf_normal = normal_pdf(z[:, i] / 700, tf.concat([n_z_mean_output[:, i:i+1], n_z_std_output[:, i:i+1]], axis=-1)) * mask[:, i]
-                x_pdf_normal = normal_pdf(x[:, i], tf.concat([n_x_mean_output[:, i:i+1], n_x_std_output[:, i:i+1]], axis=-1)) * mask[:, i]
-                y_pdf_normal = normal_pdf(y[:, i], tf.concat([n_y_mean_output[:, i:i+1], n_y_std_output[:, i:i+1]], axis=-1)) * mask[:, i]
+                x_pdf_normal = normal_pdf(x[:, i], n_x_mean_output[:, i:i+1], n_x_std_output[:, i:i+1]) * mask[:, i]
+                y_pdf_normal = normal_pdf(y[:, i], n_y_mean_output[:, i:i+1], n_y_std_output[:, i:i+1]) * mask[:, i]
 
-                sum_z_pdf_normal += z_pdf_normal
                 sum_x_pdf_normal += x_pdf_normal
                 sum_y_pdf_normal += y_pdf_normal
 
-            log_pdf_normal = tf.cast(tf.math.log(sum_z_pdf_normal + 1e-12) + tf.math.log(sum_x_pdf_normal + 1e-12) + tf.math.log(sum_y_pdf_normal + 1e-12), tf.float32)
-            sum_log_pdf_normal += tf.reduce_mean(log_pdf_normal)
-
-        true_N = tf.reduce_sum(tf.cast(z != 0, tf.int32), axis=-1) - 1
-        true_N_ohe = tf.one_hot(true_N, N)
-        N_loss = tf.keras.losses.CategoricalCrossentropy()(true_N_ohe, mask_output)
-        
-        return -sum_log_pdf_normal + N_loss
-    
-
-    def get_config(self):
-        config = super(MLPNDistributionSpatialModel, self).get_config()
-        config.update({
-            'adjacency_matrix': self.adjacency_matrix,
-        })
-        return config
-
-    
-    @tf.keras.utils.register_keras_serializable()
-    def mu_pdf_loss(y_true, output):
-        N = MLPNDistributionSpatialModel.N
-        means = output[:, :N * N]
-        stds = output[:, N * N:2 * N * N]
-        # mask = output[:, 2 * N * N:]
-
-        true_N = tf.reduce_sum(tf.cast(y_true != 0, tf.int32), axis=1) - 1
-        mu_mask = tf.cast(y_true != 0, tf.float32)
-
-        sum_log_pdf_normal = 0
-        for n in range(N):
-            n_means = means[:, n * N:n * N + N] * mu_mask
-            n_stds = stds[:, n * N:n * N + N] * mu_mask + (1 - mu_mask)
-            # n_mask = mask[:, n]
-            
-            sum_pdf_normal = 0
-            for i in range(n + 1):
-                pdf_normal = normal_pdf(y_true[:, i] / 700, tf.concat([n_means[:, i:i+1], n_stds[:, i:i+1]], axis=-1))
-                sum_pdf_normal += pdf_normal
-            log_pdf_normal = tf.cast(tf.math.log(sum_pdf_normal + 1e-12), tf.float32)
+            log_pdf_normal = tf.cast(tf.math.log(sum_x_pdf_normal + 1e-12) + tf.math.log(sum_y_pdf_normal + 1e-12), tf.float32)
             sum_log_pdf_normal += tf.reduce_mean(log_pdf_normal)
         
         return -sum_log_pdf_normal
     
-
+    @tf.keras.utils.register_keras_serializable()
+    def normal_pdf_2d(x, y, x_mean, y_mean, x_std, y_std):
+        norm_factor = 1 / (2 * np.pi * x_std * y_std)
+        exponent = -0.5 * (((x - x_mean) ** 2) / x_std ** 2 + ((y - y_mean) ** 2) / y_std ** 2)
+        return norm_factor * tf.exp(exponent)
     
     @tf.keras.utils.register_keras_serializable()
-    def mask_loss(y_true, output):
-        N = MLPNDistributionSpatialModel.N
-        mask = output[:, 2 * N * N:]
-
-        true_N = tf.reduce_sum(tf.cast(y_true != 0, tf.int32), axis=1) - 1
-        true_N_ohe = tf.one_hot(true_N, N)
-        N_loss = tf.keras.losses.CategoricalCrossentropy()(true_N_ohe, mask)
-        return N_loss
+    def bivariate_normal_pdf(x, y, x_mean, y_mean, x_std, y_std, rho):
+        norm_factor = 1 / (2 * np.pi * x_std * y_std * tf.math.sqrt(1 - rho ** 2))
+        exponent = -1 / (2 * (1 - rho ** 2)) * (
+            ((x - x_mean) ** 2) / x_std ** 2 +
+            ((y - y_mean) ** 2) / y_std ** 2 -
+            2 * rho * (x - x_mean) * (y - y_mean) / (x_std * y_std)
+        )
+        return norm_factor * tf.exp(exponent)
     
     @tf.keras.utils.register_keras_serializable()
-    def sum_pdf_loss(y_true, output):
-        N = MLPNDistributionSpatialModel.N
-        means = output[:, :N * N]
-        stds = output[:, N * N:2 * N * N]
-        # mask = output[:, 2 * N * N:]
+    def xy_sum_loss(y_true, output):
+        N = GraphDistributionModel.N
+        x_mean_output   = output[:, 2 * N * N:3 * N * N]
+        x_std_output    = output[:, 3 * N * N:4 * N * N]
+        y_mean_output   = output[:, 4 * N * N:5 * N * N]
+        y_std_output    = output[:, 5 * N * N:6 * N * N]
+        rho_output      = output[:, 6 * N * N:7 * N * N]
 
-        mu_mask = tf.cast(y_true != 0, tf.float32)
+        z, x, y = y_true[:, :, 0], y_true[:, :, 1], y_true[:, :, 2]
+
+        mask = tf.squeeze(tf.cast(z != 0, tf.float32))
 
         sum_log_pdf_normal = 0
         for n in range(N):
-            n_means = means[:, n * N:n * N + N] * mu_mask
-            n_stds = stds[:, n * N:n * N + N] * mu_mask + (1 - mu_mask)
-            # n_mask = mask[:, n]
+            n_x_mean_output = x_mean_output[:, n * N:(n + 1) * N]
+            n_x_std_output  = x_std_output[:, n * N:(n + 1) * N]
+
+            n_y_mean_output = y_mean_output[:, n * N:(n + 1) * N]
+            n_y_std_output  = y_std_output[:, n * N:(n + 1) * N]
+
+            n_rho_output = rho_output[:, n * N:(n + 1) * N]
             
-            sum_pdf_normal = 0
+            log_pdf_normal = 0
             for i in range(n + 1):
+                sum_pdf_normal = 0
                 for j in range(n + 1):
-                    pdf_normal = normal_pdf(y_true[:, i] / 700, tf.concat([n_means[:, j:j+1], n_stds[:, j:j+1]], axis=-1)) * mu_mask[:, i]
-                sum_pdf_normal += pdf_normal
-            log_pdf_normal = tf.cast(tf.math.log(sum_pdf_normal + 1e-12), tf.float32)
-            sum_log_pdf_normal += log_pdf_normal
+                    pdf_normal = GraphDistributionModel.bivariate_normal_pdf(
+                        x[:, i], y[:, i], 
+                        n_x_mean_output[:, j], n_y_mean_output[:, j], 
+                        n_x_std_output[:, j], n_y_std_output[:, j],
+                        n_rho_output[:, j]
+                    ) * mask[:, i]
+
+                    sum_pdf_normal += pdf_normal
+            
+                log_pdf_normal += tf.cast(tf.math.log(sum_pdf_normal + 1e-15), tf.float32)
+            sum_log_pdf_normal += tf.reduce_mean(log_pdf_normal)
         
-        return -tf.reduce_mean(sum_log_pdf_normal)
+        return -sum_log_pdf_normal
+
+    
+    @tf.keras.utils.register_keras_serializable()
+    def count_loss(y_true, output):
+        N = GraphDistributionModel.N
+        count_output = tf.cast(output[:, 6 * N * N:7 * N * N], tf.float32)
+        count_output_square = tf.reshape(count_output, (-1, N, N))
+
+        count = tf.cast(y_true[:, :, 3], tf.float32)
+        count_square = tf.tile(tf.expand_dims(count, axis=1), (1, N, 1))
+
+        mask = tf.cast(count != 0, tf.float32)
+        mask_sum = tf.cast(tf.reduce_sum(mask, axis=-1), tf.int32) - 1
+        mask_ohe = tf.one_hot(mask_sum, N)
+        mask_ohe_square = tf.transpose(tf.tile(tf.expand_dims(mask_ohe, axis=1), (1, N, 1)), (0, 2, 1))
+
+        masked_count_output_square = count_output_square * mask_ohe_square
+
+        count_maes = tf.reduce_mean(tf.abs(count_square - masked_count_output_square), axis=-1) * mask_ohe
+        sum_maes = tf.abs(tf.reduce_mean(count_output_square, axis=-1) - tf.reduce_mean(count_square, axis=-1)) * (1 - mask_ohe) * 0.1
+
+        return tf.reduce_mean(count_maes + sum_maes)
+    
+    @tf.keras.utils.register_keras_serializable()
+    def count_loss_simple(y_true, output):
+        N = GraphDistributionModel.N
+        count_output = output[:, 6 * N * N:7 * N * N]
+        count = y_true[:, :, 3]
+        count_sum = tf.reduce_sum(count, axis=-1)
+
+        mask = tf.cast(count != 0, tf.float32)
+        count_loss = 0
+        for n in range(N):
+            n_count_output = count_output[:, n * N:(n + 1) * N]
+            count_sum_loss = tf.abs(count_sum - tf.reduce_sum(n_count_output * mask, axis=-1))
+            count_mae_loss = tf.reduce_mean(tf.abs(count - n_count_output) * mask, axis=-1)
+
+            count_loss += tf.cast(count_sum_loss + count_mae_loss, tf.float32)
+        
+        return tf.reduce_mean(count_loss)
+    
+    @tf.keras.utils.register_keras_serializable()
+    def mask_loss(y_true, output):
+        N = GraphDistributionModel.N
+        mask_output = output[:, 8 * N * N:8 * N * N + N]
+        z, x, y = y_true[:, :, 0], y_true[:, :, 1], y_true[:, :, 2]
+
+        true_N = tf.reduce_sum(tf.cast(z != 0, tf.int32), axis=-1) - 1
+        true_N_ohe = tf.one_hot(true_N, N)
+        N_loss = tf.keras.losses.CategoricalCrossentropy()(true_N_ohe, mask_output)
+        return N_loss
     
     @tf.keras.utils.register_keras_serializable()
     def combined_loss(y_true, output):
-        alpha = 1
-        beta = 0.1
-        pdf_loss = MLPNDistributionSpatialModel.mu_pdf_loss(y_true, output)
-        mask_loss = MLPNDistributionSpatialModel.mask_loss(y_true, output)
-        sum_pdf_loss = MLPNDistributionSpatialModel.sum_pdf_loss(y_true, output)
-        return pdf_loss + alpha * mask_loss + beta * sum_pdf_loss
+        a1 = 0.2
+        a2 = 2
+        a3 = 1
+        a4 = 1
+
+        z_loss      = GraphDistributionModel.z_loss(y_true, output)
+        xy_loss     = GraphDistributionModel.xy_loss(y_true, output)
+        xy_sum_loss = GraphDistributionModel.xy_sum_loss(y_true, output)
+        mask_loss   = GraphDistributionModel.mask_loss(y_true, output)
+        count_loss  = GraphDistributionModel.count_loss_simple(y_true, output)
+        return z_loss + a1 * xy_loss + a2 * mask_loss # + a3 * xy_sum_loss # + a4 * count_loss
 
 
 

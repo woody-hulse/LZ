@@ -24,7 +24,7 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=N
     electron_pulse  = np.zeros((num_rows, num_cols, size), dtype=np.int8)
     pulse_xy        = ()
 
-    num_electrons = np.random.randint(0, 201) # 0 to 201 electrons
+    num_electrons = np.random.randint(30, 201) # 0 to 201 electrons
 
     photon_interval_width = PHDWIDTH // SAMPLERATE * 3
     photon_interval = np.array([i for i in range(-photon_interval_width, photon_interval_width + 1)])
@@ -33,17 +33,17 @@ def generate_channel_pulse(num_rows, num_cols, mu=350, size=700, num_electrons=N
     electron_pulses = np.random.normal(mu, DIFFWIDTH / SAMPLERATE, size=num_electrons)
     num_photons = np.random.poisson(G2, size=num_electrons)
 
-    r = np.random.normal(num_cols / 2, 2)
-    c = np.random.normal(num_rows / 2, 2)
+    r = np.random.uniform(2.5, num_rows - 2.5)
+    c = np.random.uniform(2.5, num_cols - 2.5)
     pulse_xy = (r, c)
 
-    er = np.random.normal(r, 0.5, size=num_electrons) # Row of electron centers
-    ec = np.random.normal(c, 0.5, size=num_electrons) # Column of electron centers
+    er = np.random.normal(r, num_rows / 16, size=num_electrons) # Row of electron centers
+    ec = np.random.normal(c, num_rows / 16, size=num_electrons) # Column of electron centers
     for e in range(num_electrons):
         eri, eci = min(num_cols - 1, max(0, int(er[e]))), min(num_rows - 1, max(0, int(ec[e])))
         electron_pulse[eri][eci][int(electron_pulses[e])] += 1
-        pr = np.random.normal(er[e], 2, size=num_photons[e]) # Row of photon centers
-        pc = np.random.normal(ec[e], 2, size=num_photons[e]) # Column of photon centers
+        pr = np.random.normal(er[e], num_rows / 8, size=num_photons[e]) # Row of photon centers
+        pc = np.random.normal(ec[e], num_rows / 8, size=num_photons[e]) # Column of photon centers
         photon_arrival_times = np.random.normal(electron_pulses[e], EGASWIDTH / SAMPLERATE, num_photons[e]) # Arrival times of photons
         for p in range(num_photons[e]):
             # Not considering multiple photoelectron emission
@@ -334,19 +334,34 @@ def generate_ss_channel_pulse_dataset_multiproc(num_pulses):
 
 
 def generate_random_ms_pulse(max_delta_mu):
+    areafrac = np.random.uniform(0.1, 0.9)
+    e1 = int(NUM_ELECTRONS * areafrac)
+    e2 = NUM_ELECTRONS - e1
     mu1 = (np.random.random() - 0.5) * max_delta_mu / SAMPLERATE + 350
     mu2 = (np.random.random() - 0.5) * max_delta_mu / SAMPLERATE + 350
-    summed_pulse_1 = generate_pulse(mu=mu1, size=700)
-    summed_pulse_2 = generate_pulse(mu=mu2, size=700)
+    summed_pulse_1 = generate_pulse(mu=mu1, size=700, num_electrons=e1)
+    summed_pulse_2 = generate_pulse(mu=mu2, size=700, num_electrons=e2)
     summed_pulse = summed_pulse_1 + summed_pulse_2
     mus = np.array([mu1, mu2])
     return summed_pulse, mus
+
+def generate_random_ms_channel_pulse(max_delta_mu):
+    areafrac = 0.5
+    e1 = int(NUM_ELECTRONS * areafrac)
+    e2 = NUM_ELECTRONS - e1
+    mu1 = (np.random.random() - 0.5) * max_delta_mu / SAMPLERATE + 350
+    mu2 = (np.random.random() - 0.5) * max_delta_mu / SAMPLERATE + 350
+    _, pulse1, _, _, _ = generate_channel_pulse(num_rows=8, num_cols=8, mu=mu1, size=700, num_electrons=e1)
+    _, pulse2, _, _, _ = generate_channel_pulse(num_rows=8, num_cols=8, mu=mu2, size=700, num_electrons=e2)
+    pulse = pulse1 + pulse2
+    mus = np.array([mu1, mu2])
+    return pulse, mus
 
 def generate_random_ms_pulse_dataset_multiproc(num_pulses, max_delta_mu=1000, save=True):
     debug_print(['generating dataset'])
     start_time = time.time()
     with Pool(processes=4) as pool:
-        results = pool.map(generate_random_ms_pulse, [max_delta_mu] * num_pulses)
+        results = pool.map(generate_random_ms_channel_pulse, [max_delta_mu] * num_pulses)
     
     summed_pulses = []
     mus = []
@@ -370,9 +385,9 @@ def save_random_ms_pulse_dataset(summed_pulses, mus):
     e = '{:.1e}'.format(num_pulses)
     fname = f'../dSSdMS/dMS_{date}_gaussgass_700samplearea7000_areafrac0o5_{e}events_random_centered.npz'
     np.savez_compressed(
-        file=fname,
+        file='channel_multi_scatter_areafrac0p5.npz',
         events=summed_pulses,
-        delta_mu=mus
+        mus=mus
     )
     debug_print(['saved dataset to', fname])
 
@@ -422,8 +437,10 @@ def load_SS_dataset(file):
         summed_pulses = f['events']
         pulses = f['channel_events']
         pulse_xys = f['pulse_xys']
+        photon_pulses = f['photon_events']
+        electron_pulses = f['electron_pulses']
 
-    return summed_pulses, pulses, pulse_xys
+    return summed_pulses, pulses, pulse_xys, photon_pulses, electron_pulses
 
 def load_pulse_dataset_old(file):
     debug_print(['loading dataset from', file])
@@ -474,10 +491,10 @@ def plot_3d_hist(hist2d, xedges=None, yedges=None):
 
 
 def main():
-    generate_ss_channel_pulse_dataset_multiproc(int(1e4))
+    generate_ss_channel_pulse_dataset_multiproc(int(1e5))
     # generate_ss_pulse_dataset_multiproc(int(1e4))
     
-    # generate_random_ms_pulse_dataset_multiproc(int(1e5), max_delta_mu=1000, save=True)
+    # generate_random_ms_pulse_dataset_multiproc(int(1e4), max_delta_mu=1000, save=True)
 
     '''
     summed_pulses, pulses, photon_pulses, delta_mu, electron_pulses = generate_pulse_dataset_multiproc(int(5e4), bins=20, max_delta_mu=1000, arrival_times=True, save=True,

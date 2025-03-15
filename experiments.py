@@ -15,6 +15,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.metrics import roc_curve, auc
 from scipy.stats import norm
 import matplotlib.cm as cm
+from skimage import measure
 
 from main import *
 sns.set_style(style='whitegrid',rc={'font.family': 'sans-serif','font.serif':'Times'})
@@ -2010,83 +2011,7 @@ def test_graph_network():
         iteration = iteration.reshape((16, 16))
         plt.imshow(iteration)
         plt.show()
-
-
-def generate_N_scatter_events(SS, max_N=4, num_events=int(1e5)):
-    num_samples = SS.shape[0]
-    num_channels = SS.shape[1]
-    center = num_channels / 2
-
-    X = np.zeros((num_events, num_channels))
-    Y = np.zeros((num_events, max_N))
-    
-    dprint('Generating N scatter events')
-    for i in tqdm(range(num_samples)):
-        n = np.random.randint(1, max_N + 1)
-        mu_offsets = np.array(np.random.normal(0, 50, n), dtype=np.int32)
-        mus = center + mu_offsets
-        pulses_idx = np.random.choice(num_samples, n, replace=False)
-        offset_pulses = [np.roll(SS[pulses_idx[j]], mu_offsets[j]) for j in range(n)]
-        X[i] = np.sum(offset_pulses, axis=0)
-        Y[i, :n] = np.sort(mus)
-    
-    return X, Y
-
-def generate_N_channel_scatter_events(X, XC, C, max_N=4, num_events=int(1e5)):
-    num_samples = X.shape[0]
-    num_channels = X.shape[1]
-    center = num_channels / 2
-
-    X_ = np.zeros((num_events, num_channels))
-    XC_ = np.zeros((num_events, XC.shape[1], XC.shape[2], num_channels))
-    Y_ = np.zeros((num_events, max_N))
-    C_ = np.zeros((num_events, max_N, 2))
-
-    dprint('Generating N scatter events')
-    for i in tqdm(range(num_events)):
-        n = np.random.randint(1, max_N + 1)
-        mu_offsets = np.array(np.random.normal(0, 50, n), dtype=np.int32)
-        mus = center + mu_offsets
-        pulses_idx = np.random.choice(num_samples, n, replace=False)
-        offset_pulses = [np.roll(X[pulses_idx[j]], mu_offsets[j]) for j in range(n)]
-        offset_channel_pulses = [np.roll(XC[pulses_idx[j]], mu_offsets[j], axis=2) for j in range(n)]
-        X_[i] = np.sum(offset_pulses, axis=0)
-        XC_[i] = np.sum(offset_channel_pulses, axis=0)
-        Y_[i, :n] = np.sort(mus)
-        C_[i, :n] = np.sort(np.array([C[pulses_idx[j]] for j in range(n)]), axis=0)
-    
-    return X_, XC_, Y_, C_
-
-
-def generate_double_scatter_events(X, XC, C, num_bins=20, max_dmu=1000, num_events=int(1e4)):
-    num_samples = X.shape[0]
-    num_channels = X.shape[1]
-    center = num_channels / 2
-
-    X_ = np.zeros((num_events, num_channels))
-    XC_ = np.zeros((num_events, XC.shape[1], XC.shape[2], num_channels))
-    Y_ = np.zeros((num_events, 4))
-    C_ = np.zeros((num_events, 4, 2))
-    DMU = np.zeros(num_events)
-
-    dprint('Generating double scatter events')
-    for i in tqdm(range(num_events)):
-        n = 2
-        dmu = (i % num_bins) * max_dmu / num_bins
-        mu1 = int(center - dmu // 2)
-        mu2 = int(center + dmu // 2)
-        pulses_idx = np.random.choice(num_samples, 2, replace=False)
-        offset_pulses = [np.roll(X[pulses_idx[j]], mu1) for j in range(2)]
-        offset_channel_pulses = [np.roll(XC[pulses_idx[j]], mu1, axis=2) for j in range(2)]
-        X_[i] = np.sum(offset_pulses, axis=0)
-        XC_[i] = np.sum(offset_channel_pulses, axis=0)
-        Y_[i, :n] = np.sort([mu1, mu2])
-        C_[i, :n] = np.sort(np.array([C[pulses_idx[j]] for j in range(n)]), axis=0)
-        DMU[i] = dmu
-    
-    return X_, XC_, Y_, C_, DMU
-
-
+        
 
 def plot_N_scatter_events(X, Y, num_events=5):
     for i in range(num_events):
@@ -2137,7 +2062,7 @@ def plot_n_distribution_model_examples(X, Y, model, pdf_func, num_examples=10, N
             plt.plot(x, sample / 10, color='grey', alpha=0.5, label='Pulse')
             for j in range(i + 1):
                 idx = i * N + j
-                y = pdf_func(x / 700, np.concatenate([means[:, idx:idx+1], stds[:, idx:idx+1]], axis=-1))
+                y = pdf_func(x / 700, means[:, idx], stds[:, idx])
                 plt.fill_between(x, y, alpha=0.5, label=f'μ{idx % N + 1} predicted distribution')
             for j in range(N):
                 if mu[j] != 0:
@@ -2182,7 +2107,7 @@ def plot_n_distribution_model_combined_examples(X, Y, model, pdf_func, num_examp
             print('---')
             for j in range(i + 1):
                 idx = i * N + j
-                y = pdf_func(x / 700, np.concatenate([means[:, idx:idx+1], stds[:, idx:idx+1]], axis=-1))
+                y = pdf_func(x / 700, means[:, idx], stds[:, idx])
                 ax[i][1].fill_between(x, y, alpha=0.5, label=f'μ{idx % N + 1} predicted distribution')
             for j in range(N):
                 if mu[j] != 0:
@@ -2199,10 +2124,10 @@ def plot_n_distribution_model_combined_examples(X, Y, model, pdf_func, num_examp
 
         plt.show()
 
-def plot_n_distribution_spatial_model_combined_examples(XC, Y, C, model, pdf_func, num_examples=10, N=4):
+def plot_n_distribution_spatial_model_combined_examples(XC, Y, C, P, model, pdf_func, num_examples=10, N=4):
     res = 100
-    for id, (sample, z, xy) in enumerate(zip(XC[:num_examples], Y[:num_examples], C[:num_examples])):
-        fig, ax = plt.subplots(N, 3, dpi=200, gridspec_kw={'width_ratios': [1, 5, 2]})
+    for id, (sample, z, xy, p) in enumerate(zip(XC[:num_examples], Y[:num_examples], C[:num_examples], P[:num_examples])):
+        fig, ax = plt.subplots(N, 4, dpi=200, gridspec_kw={'width_ratios': [1, 5, 2, 2]})
 
         output = model(np.expand_dims(sample, axis=0))
         z_means = output[:, :N * N]
@@ -2211,7 +2136,10 @@ def plot_n_distribution_spatial_model_combined_examples(XC, Y, C, model, pdf_fun
         x_stds  = output[:, 3 * N * N:4 * N * N]
         y_means = output[:, 4 * N * N:5 * N * N]
         y_stds  = output[:, 5 * N * N:6 * N * N]
-        masks   = output[:, 6 * N * N:6 * N * N + N]
+        rhos    = output[:, 6 * N * N:7 * N * N]
+        counts  = output[:, 7 * N * N:8 * N * N]
+        masks   = output[:, 8 * N * N:8 * N * N + N]
+
         for i in range(N):
             # plot mask
             ax[i][0].bar(i, masks[0, i], color='blue', alpha=0.5)
@@ -2235,39 +2163,638 @@ def plot_n_distribution_spatial_model_combined_examples(XC, Y, C, model, pdf_fun
 
             for j in range(i + 1):
                 idx = i * N + j
-                y = pdf_func(x / 700, np.concatenate([z_means[:, idx:idx+1], z_stds[:, idx:idx+1]], axis=-1))
-                ax[i][1].fill_between(x, y, alpha=0.5, label=f'μ{idx % N + 1} predicted distribution')
+                y = pdf_func(x / 700, z_means[:, idx], z_stds[:, idx]) * 1 # counts[0, idx]
+                ax[i][1].fill_between(x, y, alpha=0.5, label=f'Pred distribution', color='blue') # ({int(counts[0, idx])} pred photons)
             count = 0
             for j in range(N):
                 if z[j] != 0:
                     count += 1
-                    ax[i][1].axvline(z[j], label=f'True μ: {z[j] : .2f}', linestyle='dashed', color='black', linewidth=0.5)
+                    ax[i][1].axvline(z[j], label=f'True μ{j + 1}: {float(z[j]) : .2f}ns', linestyle='dashed', color='red', linewidth=0.5) # , {p[j][0]} photons
+                    # ax[i][1].scatter(z[j], p[j], color='red', s=5)
             ax[i][1].set_xlim(0, 700)
             ax[i][1].set_ylim(0, 50)
             ax[i][1].set_yticks([])
+            ax[i][1].legend(loc='upper right', fontsize=4, frameon=False)
+            # ax[i][1].legend(loc='upper right', fontsize=4, frameon=False)
 
-            # plot a heatmap of xy positions
-            ax[i][2].imshow(np.zeros((res, res)), cmap='viridis', extent=(0, 1, 0, 1))
-            ax[i][2].scatter(xy[:count, 0], xy[:count, 1], color='red', s=5)
-            ax[i][2].set_xticks([])
-            ax[i][2].set_yticks([])
+            # ax[i][2].scatter(xy[:count, 0], xy[:count, 1], color='red', marker='x', s=0.5, alpha=0.5)
+            ax[i][3].set_xticks([])
+            ax[i][3].set_yticks([])
             # plot gaussian distribution of xy predicted positions
             Z_ = np.zeros((res, res))
+            confidence_sum = 0
             for j in range(i + 1):
                 idx = i * N + j
                 x = np.linspace(0, 1, res)
                 y = np.linspace(0, 1, res)
                 X_, Y_ = np.meshgrid(x, y)
-                print(x_means[0, idx], y_means[0, idx])
-                Z_ += np.exp(-((X_ - x_means[0, idx])**2 + (Y_ - y_means[0, idx])**2) / (2 * x_stds[0, idx]**2))
-            ax[i][2].imshow(Z_, extent=(0, 1, 0, 1), origin='lower', cmap='viridis')
+                
+                norm_factor = 1 / (2 * np.pi * x_stds[0, idx] * y_stds[0, idx] * np.sqrt(1 - rhos[0, idx] ** 2))
+                exponent = -1 / (2 * (1 - rhos[0, idx] ** 2)) * (
+                    ((X_ - x_means[0, idx]) ** 2) / x_stds[0, idx] ** 2 +
+                    ((Y_ - y_means[0, idx]) ** 2) / y_stds[0, idx] ** 2 -
+                    2 * rhos[0, idx] * (x - x_means[0, idx]) * (Y_ - y_means[0, idx]) / (x_stds[0, idx] * y_stds[0, idx])
+                )
+                Z_ += norm_factor * tf.exp(exponent)
+                confidence_sum += x_stds[0, idx] + y_stds[0, idx]
+            
+            # set title with manual offset from top of graph
+            ax[i][3].set_title(f'1 - σ: {1 - confidence_sum / (i + 1) : .6f}', fontsize=5, pad=2)
+            ax[i][3].imshow(Z_, extent=(0, 1, 0, 1), origin='lower', cmap='viridis', vmin=0, vmax=50)
+
+            ax[i][2].scatter(xy[:count, 0], xy[:count, 1], color='red', marker='x', s=0.5, label='True xy')
+            ax[i][2].scatter(x_means[0, i * N:i * N + i + 1], y_means[0, i * N:i * N + i + 1], color='blue', s=0.5, label='Predicted xy')
+            ax[i][2].set_xlim(0, 1)
+            ax[i][2].set_ylim(0, 1)
+            ax[i][2].set_aspect('equal')
+            ax[i][2].set_xticks([])
+            ax[i][2].set_yticks([])
 
         ax[0][0].set_title('Probability', fontsize=8)
         ax[0][1].set_title(f'Event {id}')
-        ax[0][2].set_title('Predicted xy')
+        ax[0][2].set_title('Predicted xy', fontsize=8)
         ax[-1][1].set_xlabel('μ [ns]')
 
         # save figure
         plt.savefig(f'_event_{id}.png')
 
         plt.show()
+
+def plot_graph_multivariate_normal_examples(XC, Y, C, P, model, pdf_func, num_examples=10, N=4):
+    res = 100
+    photon_scale = 50
+    for id, (sample, z, xy, p) in enumerate(zip(XC[:num_examples], Y[:num_examples], C[:num_examples], P[:num_examples])):
+
+        output = model(np.expand_dims(sample, axis=0))
+
+        muxs = output[:, :N * N]
+        muys = output[:, N * N:2 * N * N]
+        muzs = output[:, 2 * N * N:3 * N * N]
+        sigxs = output[:, 3 * N * N:4 * N * N]
+        sigys = output[:, 4 * N * N:5 * N * N]
+        sigzs = output[:, 5 * N * N:6 * N * N]
+        rhoxys = output[:, 6 * N * N:7 * N * N]
+        rhoxzs = output[:, 7 * N * N:8 * N * N]
+        rhoyzs = output[:, 8 * N * N:9 * N * N]
+        counts = output[:, 9 * N * N:10 * N * N]
+        masks = output[:, 10 * N * N:10 * N * N + N]
+        
+        fig, ax = plt.subplots(N, 4, dpi=200, gridspec_kw={'width_ratios': [1, 5, 2, 2]})
+        for i in range(N):
+            # plot mask
+            ax[i][0].bar(i, masks[0, i], color='blue', alpha=0.5)
+            ax[i][0].set_ylim(0, 1)
+            ax[i][0].grid(False)
+            ax[i][0].set_xticks([])
+            ax[i][0].set_yticks([])
+            # set size of ax plot
+
+            ax[i][0].set_aspect(aspect=10)
+            # reduce width to fit box
+            box = ax[i][0].get_position()
+            ax[i][0].set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+            ax[i][1].grid(False)
+            if i != N - 1:
+                ax[i][1].set_xticks([])
+
+            x = np.arange(0, 700, 1)
+            ax[i][1].plot(x, np.sum(sample, axis=0) / 10, color='grey', alpha=0.5, label='Pulse', linewidth=0.5)
+
+            for j in range(i + 1):
+                idx = i * N + j
+                y = pdf_func(x / 700, muzs[:, idx], sigzs[:, idx]) * 1 # counts[0, idx]
+                ax[i][1].fill_between(x, y, alpha=0.5, label=f'μ{idx % N + 1} pred distribution') # ({int(counts[0, idx])} pred photons)
+            count = 0
+            for j in range(N):
+                if z[j] != 0:
+                    count += 1
+                    ax[i][1].axvline(z[j] * 700, label=f'μ{j + 1}: {float(z[j] * 700) : .1f}ns, {int(p[j] * 10000)}ph', linestyle='dashed', color='red', linewidth=0.5)
+                    ax[i][1].plot([z[j] * 700 - 3, z[j] * 700 + 3], [p[j] * photon_scale, p[j] * photon_scale], color='red', linewidth=0.5)
+            ax[i][1].set_xlim(0, 700)
+            ax[i][1].set_ylim(0, 50)
+            ax[i][1].set_yticks([])
+            ax[i][1].legend(loc='upper right', fontsize=4, frameon=False)
+
+            # ax[i][2].scatter(xy[:count, 0], xy[:count, 1], color='red', marker='x', s=0.5, alpha=0.5)
+            ax[i][3].set_xticks([])
+            ax[i][3].set_yticks([])
+            # plot gaussian distribution of xy predicted positions
+            Z_ = np.zeros((res, res))
+            confidence_sum = 0
+            for j in range(i + 1):
+                idx = i * N + j
+                x = np.linspace(0, 1, res)
+                y = np.linspace(0, 1, res)
+                X_, Y_ = np.meshgrid(x, y)
+                
+                norm_factor = 1 / (2 * np.pi * sigxs[0, idx] * sigys[0, idx] * np.sqrt(1 - rhoxys[0, idx] ** 2))
+                exponent = -1 / (2 * (1 - rhoxys[0, idx] ** 2)) * (
+                    ((X_ - muxs[0, idx]) ** 2) / sigxs[0, idx] ** 2 +
+                    ((Y_ - muys[0, idx]) ** 2) / sigys[0, idx] ** 2 -
+                    2 * rhoxys[0, idx] * (x - muxs[0, idx]) * (Y_ - muys[0, idx]) / (sigxs[0, idx] * sigys[0, idx])
+                )
+                Z_ += norm_factor * tf.exp(exponent)
+                confidence_sum += sigxs[0, idx] + sigys[0, idx]
+            
+            ax[i][3].imshow(Z_, extent=(0, 1, 0, 1), origin='lower', cmap='viridis', vmin=0, vmax=50)
+
+            ax[i][2].scatter(xy[:count, 0], xy[:count, 1], color='red', marker='x', s=0.5, label='True xy')
+            ax[i][2].scatter(muxs[0, i * N:i * N + i + 1], muys[0, i * N:i * N + i + 1], color='blue', s=0.5, label='Predicted xy')
+            print(muxs[0, i * N:i * N + i + 1])
+
+            ax[i][2].set_xlim(0, 1)
+            ax[i][2].set_ylim(0, 1)
+            ax[i][2].set_aspect('equal')
+            ax[i][2].set_xticks([])
+            ax[i][2].set_yticks([])
+
+        ax[0][0].set_title('Probability', fontsize=8)
+        ax[0][1].set_title(f'Event {id}')
+        ax[0][2].set_title('Predicted xy', fontsize=8)
+        ax[-1][1].set_xlabel('μ [ns]')
+
+        # save figure
+        plt.savefig(f'_event_{id}.png')
+
+        plt.show()
+
+
+def plot_graph_nvm_examples(XC, Y, C, P, model, pdf_func, num_examples=10, N=4):
+    res = 100
+    photon_scale = 50
+    for id, (sample, z, xy, p) in enumerate(zip(XC[:num_examples], Y[:num_examples], C[:num_examples], P[:num_examples])):
+
+        output = model(np.expand_dims(sample, axis=0))
+
+        distributions = output[:, :-model.num_dists]
+        mask = output[:, -model.num_dists:]
+
+        fig, ax = plt.subplots(N, 4, dpi=200, gridspec_kw={'width_ratios': [1, 5, 2, 2]})
+
+        for i in range(N):
+            # Plot mask
+            ax[i][0].bar(i, mask[0, i], color='blue', alpha=0.5)
+            ax[i][0].set_ylim(0, 1)
+            ax[i][0].grid(False)
+            ax[i][0].set_xticks([])
+            ax[i][0].set_yticks([])
+            ax[i][0].set_aspect(aspect=10)
+
+            # Reduce width to fit box
+            box = ax[i][0].get_position()
+            ax[i][0].set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+            ax[i][1].grid(False)
+            if i != N - 1:
+                ax[i][1].set_xticks([])
+
+            # Plot pulses
+            x = np.linspace(0, 1, 700)
+            ax[i][1].plot(x * 700, np.sum(sample, axis=0) / 10, color='grey', alpha=0.5, label='Pulse', linewidth=0.5)
+            
+            count = 0
+            for j in range(N):
+                if z[j] != 0:
+                    count += 1
+                    ax[i][1].axvline(z[j] * 700, label=f'μ{j + 1}: {float(z[j] * 700) : .1f}ns, {int(p[j] * 10000)}ph', linestyle='dashed', color='red', linewidth=0.5)
+                    ax[i][1].plot([z[j] * 700 - 3, z[j] * 700 + 3], [p[j] * photon_scale, p[j] * photon_scale], color='red', linewidth=0.5)
+
+            # Process distributions for this layer
+            Z_ = np.zeros((res, res))  # Heatmap for predicted positions
+            confidence_sum = 0
+
+            # list of 10 matplotlib colors
+            matplotlib_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan'] 
+            for j in range(i + 1):
+                idx = i * N + j
+                start_idx = idx * model.params_per_dist
+                end_idx = start_idx + model.params_per_dist
+
+                params = distributions[:, start_idx:end_idx]
+                mu = params[:, :model.num_dims]
+                cholesky_params = params[:, model.num_dims:]
+                
+                # Build Cholesky matrix
+                L = GraphMVDModel.build_cholesky(cholesky_params)
+                
+                z_pdf = pdf_func(x, mu[0, 2], L[0, 2, 2])
+                # PDF for Z dimension
+                if model.num_dims == 4:
+                    p_mu, p_std = mu[0, 3], L[0, 3, 3]
+                    p_mu_16, p_mu_84 = p_mu - p_std, p_mu + p_std
+                    max_z_pdf = np.max(z_pdf)
+                    argmax_z_pdf = np.argmax(z_pdf)
+                    
+                    ax[i][1].fill_between(x * 700, z_pdf * p_mu, alpha=0.4, linewidth=0.5, label=f'μ_hat: {mu[0, 2] * 700:.1f}ns, {int(p_mu * 10000)}ph', color=matplotlib_colors[j])
+                    
+                    ax[i][1].plot([argmax_z_pdf, argmax_z_pdf], [0, p_mu * photon_scale], linewidth=0.5, color=matplotlib_colors[j])
+                    ax[i][1].plot([argmax_z_pdf - 3, argmax_z_pdf + 3], [p_mu * photon_scale, p_mu * photon_scale], linewidth=0.5, color=matplotlib_colors[j])
+                else:
+                    ax[i][1].fill_between(x * 700, z_pdf, alpha=0.5, color='blue', linewidth=0.5)
+
+                # Heatmap for XY predicted positions
+                xy_pdf = compute_2d_pdf(mu[0, :2], L[0, :2, :2], res)
+                Z_ += xy_pdf
+
+                confidence_sum += tf.reduce_sum(tf.linalg.diag_part(L[0, :2, :2])).numpy()
+                
+                ax[i][2].scatter(mu[0, 0], mu[0, 1], color='blue', s=0.5, label='Predicted xy')
+
+            # Finalize Z distribution subplot
+            ax[i][1].set_xlim(0, 700)
+            ax[i][1].set_ylim(0, 50)
+            ax[i][1].set_yticks([])
+            ax[i][1].legend(loc='upper right', fontsize=4, frameon=False)
+
+            # XY heatmap
+            # ax[i][3].set_title(f'1 - σ: {1 - confidence_sum / (2 * (i + 1)):.6f}', fontsize=5, pad=2)
+            ax[i][3].imshow(Z_, extent=(0, 1, 0, 1), origin='lower', cmap='viridis', vmin=0, vmax=50)
+            ax[i][3].set_xticks([])
+            ax[i][3].set_yticks([])
+
+            # Scatter true XY
+            ax[i][2].scatter(xy[:count, 0], xy[:count, 1], color='red', marker='x', s=0.5, label='True xy')
+            ax[i][2].set_xlim(0, 1)
+            ax[i][2].set_ylim(0, 1)
+            ax[i][2].set_aspect('equal')
+            ax[i][2].set_xticks([])
+            ax[i][2].set_yticks([])
+
+        ax[0][0].set_title('Probability', fontsize=8)
+        ax[0][1].set_title(f'Event {id}')
+        ax[0][2].set_title('Predicted xy', fontsize=8)
+        ax[-1][1].set_xlabel('μ [ns]')
+
+        # Save figure
+        plt.savefig(f'_event_{id}.png')
+        plt.show()
+        
+def plot_graph_mvd_examples(XC, Y, C, P, model, pdf_func, num_examples=10, N=4):
+    res = 100
+    photon_scale = 50
+    for id, (sample, z, xy, p) in enumerate(zip(XC[:num_examples], Y[:num_examples], C[:num_examples], P[:num_examples])):
+
+        output = model(np.expand_dims(sample, axis=0))
+
+        distributions = output[:, :-model.num_dists]
+        mask = output[:, -model.num_dists:]
+
+        fig, ax = plt.subplots(N, 5, dpi=200, gridspec_kw={'width_ratios': [1, 5, 2, 2, 2]})
+
+        for i in range(N):
+            # Plot mask
+            ax[i][0].bar(i, mask[0, i], color='blue', alpha=0.5)
+            ax[i][0].set_ylim(0, 1)
+            ax[i][0].grid(False)
+            ax[i][0].set_xticks([])
+            ax[i][0].set_yticks([])
+            ax[i][0].set_aspect(aspect=10)
+
+            # Reduce width to fit box
+            box = ax[i][0].get_position()
+            ax[i][0].set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+            ax[i][1].grid(False)
+            if i != N - 1:
+                ax[i][1].set_xticks([])
+
+            # Plot pulses
+            x = np.linspace(0, 1, 700)
+            ax[i][1].plot(x * 700, np.sum(sample, axis=0) / 10, color='grey', alpha=0.5, label='Pulse', linewidth=0.5)
+            
+            count = 0
+            for j in range(N):
+                if z[j] != 0:
+                    count += 1
+                    ax[i][1].axvline(z[j] * 700, label=f'μ{j + 1}: {float(z[j] * 700) : .1f}ns, {int(p[j] * 10000)}ph', linestyle='dashed', color='red', linewidth=0.5)
+
+            # Process distributions for this layer
+            Z_ = np.zeros((res, res))  # Heatmap for predicted positions
+            confidence_sum = 0
+
+            # list of 10 matplotlib colors
+            matplotlib_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan'] 
+            for j in range(i + 1):
+                idx = i * N + j
+                start_idx = idx * model.params_per_dist
+                end_idx = start_idx + model.params_per_dist
+
+                params = distributions[:, start_idx:end_idx]
+                mu = params[:, :model.num_dims]
+                cholesky_params = params[:, model.num_dims:]
+                
+                # Build Cholesky matrix
+                L = GraphMVDModel.build_cholesky(cholesky_params)
+                
+                z_pdf = pdf_func(x, mu[0, 2], L[0, 2, 2])
+                # PDF for Z dimension
+                if model.num_dims == 4:
+                    p_mu, p_std = mu[0, 3], L[0, 3, 3]
+                    # p_mu_16, p_mu_84 = p_mu - p_std, p_mu + p_std
+                    # max_z_pdf = np.max(z_pdf)
+                    argmax_z_pdf = np.argmax(z_pdf)
+                    
+                    ax[i][1].fill_between(x * 700, z_pdf, alpha=0.4, linewidth=0.5, label=f'μ_hat: {mu[0, 2] * 700:.1f}ns, {int(p_mu * 10000)}ph', color='blue')
+                else:
+                    ax[i][1].fill_between(x * 700, z_pdf, alpha=0.5, color='blue', linewidth=0.5)
+
+                # Heatmap for XY predicted positions
+                xy_pdf = compute_2d_pdf(mu[0, :2], L[0, :2, :2], res)
+                Z_ += xy_pdf
+
+                confidence_sum += tf.reduce_sum(tf.linalg.diag_part(L[0, :2, :2])).numpy()
+                
+                ax[i][2].scatter(mu[0, 0], mu[0, 1], color='blue', s=0.5, label='Predicted xy')
+                # Annotate to the top right of the scatterpoint μ_{j + 1}
+                ax[i][2].annotate(f'μ{j + 1}', (mu[0, 0], mu[0, 1]), textcoords='offset points', xytext=(5, 5), ha='center', fontsize=4, color='blue')
+                
+                # scatter predicted size in s parameter scattered on xy
+                p_mu = mu[0, 3]
+                ax[i][4].scatter(mu[0, 0], mu[0, 1], color='blue', s=p_mu, label='Predicted xy size')
+                # Annotate to the top right of the scatterpoint μ_{j + 1}
+                ax[i][4].annotate(f'μ{j + 1}', (mu[0, 0], mu[0, 1]), textcoords='offset points', xytext=(5, 5), ha='center', fontsize=4, color='blue')
+            
+            ax[i][4].scatter(xy[:count, 0], xy[:count, 1], color='red', s=p, label='True xy size')
+            # Annotate to the bottom left of the scatterpoint μ_{j + 1}
+            for j in range(count):
+                ax[i][4].annotate(f'μ{j + 1}', (xy[j, 0], xy[j, 1]), textcoords='offset points', xytext=(-5, -5), ha='center', fontsize=4, color='red')
+            ax[i][4].set_xticks([])
+            ax[i][4].set_yticks([])
+            ax[i][4].set_xlim(0, 1)
+            ax[i][4].set_ylim(0, 1)
+            ax[i][4].set_aspect('equal')
+
+            # Finalize Z distribution subplot
+            ax[i][1].set_xlim(0, 700)
+            ax[i][1].set_ylim(0, 50)
+            ax[i][1].set_yticks([])
+            ax[i][1].legend(loc='upper right', fontsize=4, frameon=False)
+
+            # XY heatmap
+            # ax[i][3].set_title(f'1 - σ: {1 - confidence_sum / (2 * (i + 1)):.6f}', fontsize=5, pad=2)
+            ax[i][3].imshow(Z_, extent=(0, 1, 0, 1), origin='lower', cmap='viridis', vmin=0, vmax=50)
+            ax[i][3].set_xticks([])
+            ax[i][3].set_yticks([])
+
+            # Scatter true XY
+            ax[i][2].scatter(xy[:count, 0], xy[:count, 1], color='red', marker='x', s=0.5, label='True xy')
+            for j in range(count):
+                ax[i][4].annotate(f'μ{j + 1}', (xy[j, 0], xy[j, 1]), textcoords='offset points', xytext=(-5, -5), ha='center', fontsize=4, color='red')
+            ax[i][2].set_xlim(0, 1)
+            ax[i][2].set_ylim(0, 1)
+            ax[i][2].set_aspect('equal')
+            ax[i][2].set_xticks([])
+            ax[i][2].set_yticks([])
+
+        ax[0][0].set_title('Probability', fontsize=8)
+        ax[0][1].set_title(f'Event {id}')
+        ax[0][2].set_title('Predicted xy', fontsize=8)
+        ax[0][4].set_title('Predicted xy size', fontsize=8)
+        ax[-1][1].set_xlabel('μ [ns]')
+
+        # Save figure
+        plt.savefig(f'_event_{id}.png')
+        plt.show()
+
+
+def compute_2d_pdf(mu, L, res):
+    """
+    Computes a 2D PDF for plotting the predicted XY heatmap.
+
+    Args:
+    - mu: Mean vector (2,).
+    - cov: Covariance matrix (2, 2).
+    - res: Resolution for the grid.
+
+    Returns:
+    - Heatmap values as a (res, res) matrix.
+    """
+    x = np.linspace(0, 1, res)
+    y = np.linspace(0, 1, res)
+    X, Y = np.meshgrid(x, y)
+    pos = np.stack([X, Y], axis=-1)
+
+    dist = tfd.MultivariateNormalTriL(loc=mu, scale_tril=L)
+    pdf_values = dist.prob(pos)
+    return pdf_values
+
+
+def plot_prediction_xyz_z_distribution(X, Y, model, pdf_func, N=4):
+    output = np.zeros((Y.shape[0], 116))
+    for i in tqdm(range(0, X.shape[0], 500)):
+        output[i:i+500] = model(X[i:i+500])
+
+    z_means = output[:, :N * N]
+    z_stds  = output[:, N * N:2 * N * N]
+    x_means = output[:, 2 * N * N:3 * N * N]
+    x_stds  = output[:, 3 * N * N:4 * N * N]
+    y_means = output[:, 4 * N * N:5 * N * N]
+    y_stds  = output[:, 5 * N * N:6 * N * N]
+
+    z_means_ = np.zeros((Y.shape[0], N))
+    z_stds_ = np.zeros((Y.shape[0], N))
+    x_means_ = np.zeros((Y.shape[0], N))
+    x_stds_ = np.zeros((Y.shape[0], N))
+    y_means_ = np.zeros((Y.shape[0], N))
+    y_stds_ = np.zeros((Y.shape[0], N))
+
+    z, x, y = Y[:, 0], Y[:, 1], Y[:, 2]
+
+    for i in tqdm(range(N)):
+        n = np.sum(z[i] > 0, dtype=np.int32) - 1
+        z_means_[i, :] = z_means[i, n * N: (n + 1) * N]
+        z_stds_[i, :]  =  z_stds[i, n * N: (n + 1) * N]
+        x_means_[i, :] = x_means[i, n * N: (n + 1) * N]
+        x_stds_[i, :]  =  x_stds[i, n * N: (n + 1) * N]
+        y_means_[i, :] = y_means[i, n * N: (n + 1) * N]
+        y_stds_[i, :]  =  y_stds[i, n * N: (n + 1) * N]
+
+    zz = (z - z_means_) / z_stds_
+    xx = (x - x_means_) / x_stds_
+    yy = (y - y_means_) / y_stds_
+
+    # clip
+    zz = np.clip(zz, -10, 10)
+    xx = np.clip(xx, -10, 10)
+    yy = np.clip(yy, -10, 10)
+
+    fig, ax = plt.subplots(1, 3, dpi=200, figsize=(12, 4))
+    ax[0].hist(zz.flatten(), bins=100, color='blue', edgecolor='blue', label='z-scores')
+    ax[0].plot(np.arange(-5, 5, 0.1), pdf_func(np.arange(-5, 5, 0.1), 0, 1) * zz.shape[0] * 0.1, color='red', label='Target distribution')
+    ax[0].set_xlabel('z-score')
+    ax[0].set_ylabel('Count')
+    ax[0].set_xlim(-11, 11)
+    ax[0].legend()
+
+    ax[1].hist(xx.flatten(), bins=100, color='blue', edgecolor='blue', label='z-scores')
+    ax[1].plot(np.arange(-5, 5, 0.1), pdf_func(np.arange(-5, 5, 0.1), 0, 1) * xx.shape[0] * 0.1, color='red', label='Target distribution')
+    ax[1].set_xlabel('z-score')
+    ax[1].set_ylabel('Count')
+    ax[1].set_xlim(-11, 11)
+    ax[1].legend()
+
+    ax[2].hist(yy.flatten(), bins=100, color='blue', edgecolor='blue', label='z-scores')
+    ax[2].plot(np.arange(-5, 5, 0.1), pdf_func(np.arange(-5, 5, 0.1), 0, 1) * yy.shape[0] * 0.1, color='red', label='Target distribution')
+    ax[2].set_xlabel('z-score')
+    ax[2].set_ylabel('Count')
+    ax[2].set_xlim(-11, 11)
+    ax[2].legend()
+
+
+def plot_pdf_heatmap_3d(XC, Y, C, P, model, pdf_func, res=100, num_examples=10, N=4):
+    for id, (sample, z, xy, p) in enumerate(zip(XC[:num_examples], Y[:num_examples], C[:num_examples], P[:num_examples])):
+
+        output = model(np.expand_dims(sample, axis=0))
+
+        muxs = output[:, :N * N]
+        muys = output[:, N * N:2 * N * N]
+        muzs = output[:, 2 * N * N:3 * N * N]
+        sigxs = output[:, 3 * N * N:4 * N * N]
+        sigys = output[:, 4 * N * N:5 * N * N]
+        sigzs = output[:, 5 * N * N:6 * N * N]
+        rhoxys = output[:, 6 * N * N:7 * N * N]
+        rhoxzs = output[:, 7 * N * N:8 * N * N]
+        cyzs = output[:, 8 * N * N:9 * N * N]
+        counts = output[:, 9 * N * N:10 * N * N]
+        mask = output[:, 10 * N * N:10 * N * N + N]
+
+        n = np.argmax(mask)
+
+        muxs_n = muxs[:, n * N:(n + 1) * N]
+        muys_n = muys[:, n * N:(n + 1) * N]
+        muzs_n = muzs[:, n * N:(n + 1) * N]
+        sigxs_n = sigxs[:, n * N:(n + 1) * N]
+        sigys_n = sigys[:, n * N:(n + 1) * N]
+        sigzs_n = sigzs[:, n * N:(n + 1) * N]
+        rhoxys_n = rhoxys[:, n * N:(n + 1) * N]
+        rhoxzs_n = rhoxzs[:, n * N:(n + 1) * N]
+        cyzs_n = cyzs[:, n * N:(n + 1) * N]
+        counts_n = counts[:, n * N:(n + 1) * N]
+
+        muxs_n = np.tile(muxs_n, (res * res * res, 1))
+        muys_n = np.tile(muys_n, (res * res * res, 1))
+        muzs_n = np.tile(muzs_n, (res * res * res, 1))
+        sigxs_n = np.tile(sigxs_n, (res * res * res, 1))
+        sigys_n = np.tile(sigys_n, (res * res * res, 1))
+        sigzs_n = np.tile(sigzs_n, (res * res * res, 1))
+        rhoxys_n = np.tile(rhoxys_n, (res * res * res, 1))
+        rhoxzs_n = np.tile(rhoxzs_n, (res * res * res, 1))
+        cyzs_n = np.tile(cyzs_n, (res * res * res, 1))
+
+        # xyz_flat = np.array(np.random.random(size=(res * res * res, 3, 1)), dtype=np.float32)
+        xyz = np.zeros((res, res, res, 3), dtype=np.float32)
+        for i in range(res):
+            for j in range(res):
+                for k in range(res):
+                    xyz[i, j, k] = np.array([i / res, j / res, k / res], dtype=np.float32)
+        xyz_flat = xyz.reshape(-1, 3, 1)
+        pdf = pdf_func(xyz_flat[:, 0], xyz_flat[:, 1], xyz_flat[:, 2], muxs_n, muys_n, muzs_n, sigxs_n, sigys_n, sigzs_n, rhoxys_n, rhoxzs_n, cyzs_n)
+        sum_pdf_flat = np.minimum(np.sum(pdf[:, :n + 1], axis=1), N) / N
+
+        sum_pdf = sum_pdf_flat.reshape(res, res, res)
+
+        '''
+        xyz_flat_points = xyz_flat[sum_pdf > 1e-3]
+        sum_pdf_points = sum_pdf[sum_pdf > 1e-3]
+
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+
+        facecolors = np.zeros((sum_pdf_points.shape[0], 4))
+        facecolors[:, 0] = 0.1
+        facecolors[:, 1] = 0.4
+        facecolors[:, 2] = 0.9
+        facecolors[:, 3] = sum_pdf_points / 10
+
+        edgecolors = np.zeros((sum_pdf_points.shape[0], 4))
+        edgecolors[:, 0] = 0.1
+        edgecolors[:, 1] = 0.4
+        edgecolors[:, 2] = 0.9
+        edgecolors[:, 3] = sum_pdf_points / 10
+
+        ax.scatter(xyz_flat_points[:, 0], xyz_flat_points[:, 1], xyz_flat_points[:, 2] * 700, facecolors=facecolors, edgecolors=edgecolors, s=4)
+
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_zlim(0, 700)
+
+        '''
+
+        sum_pdf_binary = (sum_pdf > 0.3).astype(int)
+
+        verts, faces, normals, values = measure.marching_cubes(sum_pdf_binary, level=0.5)
+
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111, projection="3d")
+
+        ax.plot_trisurf(
+            verts[:, 0],
+            verts[:, 1],
+            verts[:, 2],
+            triangles=faces,
+            color='blue',
+            edgecolor="none",
+            alpha=0.1
+        )
+
+        plt.show()
+        
+def plot_mvn_pdf_heatmap_3d(XC, Y, C, P, model, pdf_func, res=100, num_examples=10, N=4):
+    for id, (sample, z, xy, p) in enumerate(zip(XC[:num_examples], Y[:num_examples], C[:num_examples], P[:num_examples])):
+
+        output = model(np.expand_dims(sample, axis=0))
+        
+        mu, cholesky_params, mask = model.decompose_output(output)
+        
+        n = np.argmax(mask)
+        mu, cholesky_params = np.tile(mu[:, n], (res * res * res, 1)), np.tile(cholesky_params[:, n], (res * res * res, 1))
+        
+        xyz = np.zeros((res, res, res, 3), dtype=np.float32)
+        for i in range(res):
+            for j in range(res):
+                for k in range(res):
+                    xyz[i, j, k] = np.array([i / res, j / res, k / res], dtype=np.float32)
+        xyz_flat = xyz.reshape(-1, 3)
+        pdf = np.zeros((res * res * res,))
+        
+        for i in range(n + 1):
+            pdf += pdf_func(xyz_flat, mu[:, i], cholesky_params[:, i]).numpy()[:, 0]
+
+        pdf_binary = (pdf.reshape((res, res, res)) > 5).astype(int)
+
+        verts, faces, normals, values = measure.marching_cubes(pdf_binary, level=0.5)
+
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111, projection="3d")
+
+        ax.plot_trisurf(
+            verts[:, 0] / res,
+            verts[:, 1] / res,
+            verts[:, 2] / res,
+            triangles=faces,
+            color='blue',
+            edgecolor="none",
+            alpha=0.2
+        )
+        
+        for i in range(N):
+            if z[i] != 0:
+                ax.scatter(xy[i, 0], xy[i, 1], z[i], color='red', s=10)
+                
+        # set limits to 1
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_zlim(0, 1)
+        
+        plt.savefig(f'event_{id}_3d_pdf.png')
+
+        plt.show()
+        
+        
+        
+        
+        
+        
+        
+        
