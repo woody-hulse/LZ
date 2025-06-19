@@ -22,7 +22,6 @@ from preprocessing import *
 # from models import *
 from regression_models import *
 from channel_models import *
-from vgg import *
 from experiments import *
 from autoencoder_ import *
 from pulse import *

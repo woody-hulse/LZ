@@ -284,3 +284,5 @@ class VQVariationalAutoencoder(tf.keras.Model):
         indices, codebook = self.vq_layer(x, return_indices=True)
 
         return indices, codebook
+
+

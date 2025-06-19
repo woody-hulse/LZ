@@ -8,6 +8,7 @@ import pickle
 
 from PIL import Image
 import imageio
+import copy
 from tqdm import tqdm
 import os
 import datetime

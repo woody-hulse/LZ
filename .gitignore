@@ -1,3 +1,4 @@
-saved_models/*
-figs/*
-ckpts/*
+saved_models/
+figs/
+ckpts/
+data/

@@ -19,7 +19,6 @@ from spektral.layers import GATConv
 from functools import partial
 # import keras_tuner
 import numpy as np
-from vgg import *
 
 from scipy.stats import wasserstein_distance
 from matplotlib import pyplot as plt
