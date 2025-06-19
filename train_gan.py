@@ -15,7 +15,7 @@ import networkx as nx
 import time
 
 
-def plot_training_metrics(metrics_history, save_path=None, window_size=20):
+def plot_training_metrics(metrics_history, save_path='data/', window_size=20):
     """
     Creates publication-quality plots of WGAN training metrics.
     
@@ -147,8 +147,8 @@ def train_dense_gan(
     
     # Directories
     log_dir='logs',
-    checkpoint_dir='ckpts',
-    sample_dir='samples'
+    checkpoint_dir='data/ckpts',
+    sample_dir='data/samples'
 ):
     """
     Train a Dense Autoencoder GAN model using vertex electron data

@@ -183,7 +183,7 @@ def plot_3d_scatter(event, title, save_path='', threshold=0.1, figsize=(12, 12),
     return fig
 
 
-def plot_3d_scatter_with_profiles(event, title, save_path='', threshold=0.1, figsize=(12, 8), dpi=150, azimuth=30, elevation=30, cmap='viridis', t_group_size=1, return_fig=False, normalize=True):
+def plot_3d_scatter_with_profiles(event, title, save_path='data/', threshold=0.1, figsize=(12, 8), dpi=150, azimuth=30, elevation=30, cmap='viridis', t_group_size=1, return_fig=False, normalize=True):
     
     event = np.clip(event, 0, 4)
     event = event.reshape((event.shape[0], event.shape[1], event.shape[2] // t_group_size, t_group_size))
